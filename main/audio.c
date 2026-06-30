@@ -249,6 +249,33 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+void audio_write_pcm(const int16_t *samples, size_t num_samples, int sample_rate, int channels)
+{
+    if (codec_dev == NULL || samples == NULL || num_samples == 0) {
+        return;
+    }
+
+    // 立体声转单声道简单处理：取左声道
+    // 单声道直接写入
+    size_t bytes = num_samples * sizeof(int16_t);
+    if (channels >= 2) {
+        // 下混到单声道：(L+R)/2
+        static int16_t mono_buf[1152 * 2];  // max samples per MP3 frame
+        size_t mono_count = num_samples / 2;
+        if (mono_count > sizeof(mono_buf) / sizeof(mono_buf[0])) {
+            mono_count = sizeof(mono_buf) / sizeof(mono_buf[0]);
+        }
+        for (size_t i = 0; i < mono_count; i++) {
+            int32_t mix = (int32_t)samples[i * 2] + samples[i * 2 + 1];
+            mono_buf[i] = (int16_t)(mix / 2);
+        }
+        bytes = mono_count * sizeof(int16_t);
+        esp_codec_dev_write(codec_dev, mono_buf, (int)bytes);
+    } else {
+        esp_codec_dev_write(codec_dev, (void *)samples, (int)bytes);
+    }
+}
+
 esp_err_t audio_set_volume(int vol)
 {
     if (codec_dev == NULL) {
