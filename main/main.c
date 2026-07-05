@@ -1,9 +1,12 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "beep.h"
 #include "audio.h"
+#include "my_spi.h"
+#include "spilcd.h"
 // #include "mp3_decoder.h"
 
 // 引用 EMBED_FILES 内嵌的 canon.pcm
@@ -25,6 +28,15 @@ void app_main(void)
         ESP_LOGE("APP", "audio init failed");
     }
 
+    ESP_LOGI("APP", "init SPI bus");
+    my_spi_init();
+
+    ESP_LOGI("APP", "init LCD");
+    spilcd_init();
+
+    // 显示一行文字（320x240 横屏，size=16 字体，居中）
+    spilcd_show_string(40, 100, 280, 130, 16, "Hello ESP32-S3!", RED);
+
     // 播放 PCM
     size_t canon_len = canon_pcm_end - canon_pcm_start;
     ESP_LOGI("APP", "playing canon.pcm (%d bytes)", canon_len);
@@ -37,12 +49,12 @@ void app_main(void)
 
     while (1)
     {
-        ESP_LOGI("APP", "beep on");
-        beep_on();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        // ESP_LOGI("APP", "beep on");
+        // beep_on();
+        // vTaskDelay(pdMS_TO_TICKS(100));
 
-        ESP_LOGI("APP", "beep off");
-        beep_off();
-        vTaskDelay(pdMS_TO_TICKS(900));
+        // ESP_LOGI("APP", "beep off");
+        // beep_off();
+        // vTaskDelay(pdMS_TO_TICKS(900));
     }
 }
