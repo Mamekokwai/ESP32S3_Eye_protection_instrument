@@ -1,5 +1,6 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# 16MB flash, factory ≥4MB for embedded assets
+# 16MB flash: factory 1MB + storage ~15MB
 nvs,      data, nvs,     ,        0x6000,
 phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        6M,
+factory,  app,  factory, ,        1M,
+storage,  data, fat,     ,        14M,

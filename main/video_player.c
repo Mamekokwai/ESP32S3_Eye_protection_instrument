@@ -398,11 +398,14 @@ esp_err_t video_player_play(const char *filename)
         {
             int64_t elapsed = esp_timer_get_time() - start_ts;
             ESP_LOGI(TAG, "--- profile %lu frames (loop %d) ---", frame_count, loop_cnt);
+            ESP_LOGI(TAG, "  elapsed       : %lld ms", elapsed / 1000);
             ESP_LOGI(TAG, "  avg fps       : %.1f", frame_count * 1e6 / elapsed);
             ESP_LOGI(TAG, "  wait decode   : %lld ms (%.0f%%)",
                      t_wait_dec / 1000, 100.0 * t_wait_dec / elapsed);
             ESP_LOGI(TAG, "  read chunk    : %lld ms (%.0f%%)",
                      t_read / 1000, 100.0 * t_read / elapsed);
+            ESP_LOGI(TAG, "  wait lcd      : %lld ms (%.0f%%)",
+                     t_wait_lcd / 1000, 100.0 * t_wait_lcd / elapsed);
         }
 
         /* (f) 退出检查 */
