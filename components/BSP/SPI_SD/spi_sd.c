@@ -31,11 +31,14 @@ esp_err_t sd_spi_init(void)
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,                            /* 如果挂载失败：true会重新分区和格式化/false不会重新分区和格式化 */
         .max_files = 5,                                             /* 打开文件最大数量 */
-        .allocation_unit_size = 4 * 1024 * sizeof(uint8_t)          /* 硬盘分区簇的大小 */
+        .allocation_unit_size = 64 * 1024 * sizeof(uint8_t)          /* 硬盘分区簇的大小 64KB */
     };
 
-    /* SD卡参数配置 */
+    /* SD卡参数配置: 尝试 40MHz 高速 */
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;  /* 20MHz — 模块硬件上限 */
+    /* 获取实际可用频率 (ESP32-S3 SPI: 80MHz APB / 2 = 40MHz) */
+    ESP_LOGI("spi_sd", "Target SD SPI freq: %d kHz", (int)host.max_freq_khz);
 
     /* SD卡引脚配置 */
     sdspi_device_config_t slot_config = {0};
@@ -44,6 +47,7 @@ esp_err_t sd_spi_init(void)
     slot_config.gpio_cd   = GPIO_NUM_NC;
     slot_config.gpio_wp   = GPIO_NUM_NC;
     slot_config.gpio_int  = GPIO_NUM_NC;
+    slot_config.duty_cycle_pos = 128;  /* 50/50 占空比 */
 
     mount_ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);      /* 挂载文件系统 */
     ret |= mount_ret;

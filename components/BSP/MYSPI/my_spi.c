@@ -1,16 +1,35 @@
 #include "my_spi.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
 
-
-/* SD卡设备句柄 */
+/* SD 卡设备句柄 (仅用作初始化标志, SDSPI 驱动内部有自己的设备) */
 spi_device_handle_t MY_SD_Handle = NULL;
 
 /**
- * @brief       spi初始化
+ * @brief       SPI 总线初始化
+ *
+ * 只初始化 SPI 总线, 不添加设备。
+ * SDSPI 驱动 (sdspi_host_init_device) 会自行添加设备到总线上。
+ *
  * @param       无
  * @retval      esp_err_t
  */
 esp_err_t my_spi_init(void)
 {
+    /* 避免重复初始化 */
+    static bool bus_initialized = false;
+    if (bus_initialized) {
+        MY_SD_Handle = (spi_device_handle_t)1;  /* 非 NULL 标记 */
+        return ESP_OK;
+    }
+
+    /* 提高 SPI 引脚驱动强度: 40MHz 高速信号需要更强的驱动力 */
+    gpio_set_drive_capability(SPI_SCLK_PIN, GPIO_DRIVE_CAP_3);  /* 40mA */
+    gpio_set_drive_capability(SPI_MOSI_PIN, GPIO_DRIVE_CAP_3);  /* 40mA */
+    /* MISO 上拉: SD卡 DO 线需要上拉, 帮助高速信号上升沿 */
+    gpio_set_pull_mode(SPI_MISO_PIN, GPIO_PULLUP_ONLY);
+    ESP_LOGI("my_spi", "SPI pins: SCLK/MOSI drive=40mA, MISO pull-up");
+
     spi_bus_config_t buscfg = {
         .sclk_io_num     = SPI_SCLK_PIN,    /* 时钟引脚 */
         .mosi_io_num     = SPI_MOSI_PIN,    /* 主机输出从机输入引脚 */
@@ -22,16 +41,10 @@ esp_err_t my_spi_init(void)
     /* 初始化SPI总线 */
     ESP_ERROR_CHECK(spi_bus_initialize(MY_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
-    /* SPI驱动接口配置,SPISD卡时钟是20-25MHz */
-    spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 20 * 1000 * 1000, /* SPI时钟 */
-        .mode = 0,                          /* SPI模式0 */
-        .spics_io_num = SD_CS_PIN,          /* 片选引脚 */
-        .queue_size = 7,                    /* 事务队列尺寸 7个 */
-    };
-
-    /* 添加SPI总线设备 */
-    ESP_ERROR_CHECK(spi_bus_add_device(MY_SPI_HOST, &devcfg, &MY_SD_Handle));
+    /* SDSPI 驱动会自行通过 sdspi_host_init_device() 添加设备,
+     * 这里的 MY_SD_Handle 仅用作初始化标志, 不参与实际 SPI 通信 */
+    MY_SD_Handle = (spi_device_handle_t)1;
+    bus_initialized = true;
 
     return ESP_OK;
 }
