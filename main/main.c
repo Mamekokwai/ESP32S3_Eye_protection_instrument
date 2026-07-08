@@ -10,6 +10,7 @@
 #include "spi_sd.h"
 #include "video_player.h"
 #include "raw_player.h"
+#include "flash_player.h"
 #include <dirent.h>
 #include <sys/stat.h>
 // #include "mp3_decoder.h"
@@ -97,8 +98,11 @@ void app_main(void)
     }
     else
     {
-        ESP_LOGW("APP", "SD card mount failed");
-        spilcd_show_string(10, 200, 300, 230, 16, "No SD card", RED);
+        ESP_LOGW("APP", "SD card mount failed, trying Flash...");
+        esp_err_t flash_ret = flash_video_play();
+        if (flash_ret != ESP_OK) {
+            spilcd_show_string(10, 200, 300, 230, 16, "No SD card", RED);
+        }
     }
 
     // 播放 MP3 示例（取消注释并把 .mp3 文件加到 EMBED_FILES）:

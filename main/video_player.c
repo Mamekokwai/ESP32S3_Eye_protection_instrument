@@ -307,44 +307,30 @@ esp_err_t video_player_play(const char *filename)
     uint16_t offx = (320 - avi.Width) / 2;
     uint16_t offy = (240 - avi.Height) / 2;
 
-    /* ---- 外层: 无缝循环 ---- */
-    static bool s_prefetched = false; /* 跨循环保持: 上一轮结束已预取 F0 */
-    int loop_cnt = 0;
+    /* ---- 主循环: 读到文件尾自动绕回 movi 头 ---- */
+    f_lseek(&file, movi_pos);
+    sr.pos = sr.valid = 0;
 
-    for (;; loop_cnt++)
-    {
-        f_lseek(&file, movi_pos);
-        sr.pos = sr.valid = 0;
-        refresh_done_flag = 1;
+    /* 预读前两帧 */
+    if (!read_one_chunk(&sr, &avi, jpeg_buf[0], &jpeg_size[0], NULL) ||
+        !read_one_chunk(&sr, &avi, jpeg_buf[1], &jpeg_size[1], NULL))
+        { ESP_LOGE(TAG, "prefetch fail"); goto cleanup; }
 
-        uint32_t frame_count = 0;
-        int64_t start_ts = esp_timer_get_time();
-        int64_t next_ts = start_ts + avi.SecPerFrame;
-        bool first_vf = true;
-        int64_t t_wait_dec = 0, t_read = 0, t_wait_lcd = 0;
-        int audio_frames = 0, video_chunks = 0;
-        int cur = 0, next = 1;
-        bool have_next = true;
-        int pending;
+    /* 提交 F0 到 Core1 */
+    decode_job_t job0 = {jpeg_buf[0], jpeg_size[0], frame_buf[0]};
+    xQueueSend(s_decode_q, &job0, 0);
 
-        if (!s_prefetched) {
-            /* 第一轮: 完整预读 F0 + F1, 提交 F0 */
-            if (!read_one_chunk(&sr, &avi, jpeg_buf[0], &jpeg_size[0], NULL) ||
-                !read_one_chunk(&sr, &avi, jpeg_buf[1], &jpeg_size[1], NULL))
-                { ESP_LOGE(TAG, "prefetch fail"); goto cleanup; }
-            decode_job_t job0 = {jpeg_buf[0], jpeg_size[0], frame_buf[0]};
-            xQueueSend(s_decode_q, &job0, 0);
-            pending = 1;
-        } else {
-            /* 后续轮: F0 在上一轮结束时已提交 Core1, 只需预读 F1 */
-            s_prefetched = false;
-            if (!read_one_chunk(&sr, &avi, jpeg_buf[1], &jpeg_size[1], NULL))
-                { ESP_LOGE(TAG, "prefetch F1 fail"); goto cleanup; }
-            pending = 1; /* F0 正在 Core1 解码中 */
-        }
+    uint32_t frame_count = 0;
+    int64_t start_ts = esp_timer_get_time();
+    int64_t next_ts = start_ts + avi.SecPerFrame;
+    bool first_vf = true;
+    int64_t t_wait_dec = 0, t_read = 0, t_wait_lcd = 0, t_rate_ctl = 0;
+    int audio_frames = 0, video_chunks = 0, loop_wraps = 0;
+    int cur = 0, next = 1;
+    bool have_next = true;
+    int pending = 1;
 
-        if (loop_cnt == 0)
-            ESP_LOGI(TAG, "Start: audio=%s", ENABLE_AUDIO ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Start: audio=%s, seamless", ENABLE_AUDIO ? "ON" : "OFF");
 
         while (1)
         {
@@ -367,11 +353,18 @@ esp_err_t video_player_play(const char *filename)
         int aud = 0;
         have_next = read_one_chunk(&sr, &avi, jpeg_buf[cur], &jpeg_size[cur], &aud);
         audio_frames += aud;
-        if (have_next)
-            video_chunks++;
+        if (!have_next) {
+            /* 文件读完 → 无缝绕回 movi 头 */
+            f_lseek(&file, movi_pos);
+            sr.pos = sr.valid = 0;
+            have_next = read_one_chunk(&sr, &avi, jpeg_buf[cur], &jpeg_size[cur], &aud);
+            loop_wraps++;
+        }
+        if (have_next) video_chunks++;
         t_read += esp_timer_get_time() - t0;
 
         /* (d) 帧率控制 */
+        t0 = esp_timer_get_time();
         if (!first_vf)
         {
             while (esp_timer_get_time() < next_ts)
@@ -383,6 +376,7 @@ esp_err_t video_player_play(const char *filename)
             first_vf = false;
             next_ts = esp_timer_get_time() + avi.SecPerFrame;
         }
+        t_rate_ctl += esp_timer_get_time() - t0;
 
         /* (e) 等待 LCD 完成, 发送 frame[cur] */
         t0 = esp_timer_get_time();
@@ -397,7 +391,7 @@ esp_err_t video_player_play(const char *filename)
         if (frame_count % PROF_EVERY == 0)
         {
             int64_t elapsed = esp_timer_get_time() - start_ts;
-            ESP_LOGI(TAG, "--- profile %lu frames (loop %d) ---", frame_count, loop_cnt);
+            ESP_LOGI(TAG, "--- profile %lu frames (wrap %d) ---", frame_count, loop_wraps);
             ESP_LOGI(TAG, "  elapsed       : %lld ms", elapsed / 1000);
             ESP_LOGI(TAG, "  avg fps       : %.1f", frame_count * 1e6 / elapsed);
             ESP_LOGI(TAG, "  wait decode   : %lld ms (%.0f%%)",
@@ -406,32 +400,14 @@ esp_err_t video_player_play(const char *filename)
                      t_read / 1000, 100.0 * t_read / elapsed);
             ESP_LOGI(TAG, "  wait lcd      : %lld ms (%.0f%%)",
                      t_wait_lcd / 1000, 100.0 * t_wait_lcd / elapsed);
-        }
-
-        /* (f) 退出检查 */
-        if (pending == 0) {
-            /* 提前预取下一轮 F0: 与当前帧 LCD DMA 重叠 */
-            f_lseek(&file, movi_pos);
-            sr.pos = sr.valid = 0;
-            refresh_done_flag = 1;
-            if (read_one_chunk(&sr, &avi, jpeg_buf[0], &jpeg_size[0], NULL)) {
-                decode_job_t job = { jpeg_buf[0], jpeg_size[0], frame_buf[0] };
-                xQueueSend(s_decode_q, &job, 0);
-                s_prefetched = true;
-            }
-            break;
+            ESP_LOGI(TAG, "  rate control  : %lld ms (%.0f%%)",
+                     t_rate_ctl / 1000, 100.0 * t_rate_ctl / elapsed);
         }
 
         /* (g) 交换 */
         cur = next;
         next = 1 - next;
     }
-
-    lcd_wait();
-    int64_t elapsed = esp_timer_get_time() - start_ts;
-    ESP_LOGI(TAG, "Loop %d: %lu frames %.1fs (%.1f fps)",
-             loop_cnt, frame_count, elapsed / 1e6, frame_count / (elapsed / 1e6));
-}
 
 cleanup:
     /* 通知解码任务退出 */
