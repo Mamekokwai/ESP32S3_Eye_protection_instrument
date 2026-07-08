@@ -243,12 +243,12 @@ esp_err_t video_player_play(const char *filename)
     sr_t sr = {0};
     AVI_INFO avi;
 
-    /* 分配内存 */
+    /* 分配内存 (16-byte 对齐: esp_new_jpeg 要求) */
     for (int i = 0; i < 2; i++)
     {
-        frame_buf[i] = heap_caps_malloc(FRAME_BUF_SIZE, MALLOC_CAP_SPIRAM);
+        frame_buf[i] = heap_caps_aligned_alloc(16, FRAME_BUF_SIZE, MALLOC_CAP_SPIRAM);
         if (!frame_buf[i])
-            frame_buf[i] = heap_caps_malloc(FRAME_BUF_SIZE, MALLOC_CAP_8BIT);
+            frame_buf[i] = heap_caps_aligned_alloc(16, FRAME_BUF_SIZE, MALLOC_CAP_8BIT);
         if (!frame_buf[i])
         {
             ESP_LOGE(TAG, "OOM fb");
