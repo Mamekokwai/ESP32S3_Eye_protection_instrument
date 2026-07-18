@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c"  "audio.c" "avi.c" "mjpeg.c" "video_player.c" "raw_player.c" "flash_player.c"
+    SRCS "reset_to_dl.c" "main.c"  "audio.c" "avi.c" "mjpeg.c" "video_player.c" "raw_player.c" "flash_player.c" "reset_to_dl.c"
     INCLUDE_DIRS "."
     EMBED_FILES "canon.pcm"
     REQUIRES BSP esp_timer spi_flash)

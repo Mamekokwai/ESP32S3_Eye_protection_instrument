@@ -16,6 +16,8 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+首次烧录需全量 `idf.py flash`。
+
 ## 硬件引脚 (YT06 V1.1)
 
 | 功能 | GPIO | 备注 |
@@ -34,7 +36,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | MOSI | IO47 | R21 10K 上拉 |
 | MISO | IO14 | |
 | CS | IO0 | R20 10K 上拉 |
-| **ES8311 I2C** | SDA=IO4, SCL=IO5 | 和旧板相同 |
+| **ES8311 I2C** | SDA=IO4, SCL=IO5 | |
 | **ES8311 I2S** | MCLK=IO45 | BCLK/WS/DOUT/DIN 待确认 |
 | **USB OTG** | D_N=IO3, D_P=IO46 | |
 | **UART** | TX=IO38, RX=IO44 | JP3 跳线 |
@@ -51,45 +53,117 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | TP4056 (U3) | 锂电池充电 |
 | HXL1509-ADJ (U9) | DC-DC 降压 (5V→3.3V) |
 
-## 与旧板 (Hiwonder) 差异
+## 分区表
 
-| 功能 | 旧板 | YT06 V1.1 |
-|------|------|-----------|
-| LCD 接口 | SPI ST7789 | **8080 并口 8-bit** |
-| LCD 分辨率 | 320×240 | **320×320** 圆屏 |
-| SD SPI | 共享 SPI2 | **独立 SPI** (不抢总线!) |
-| GPIO 扩展 | XL9555 (I2C) | **CA51F352P4** |
-| 蜂鸣器 | IO46 PWM | **无** |
-| USB OTG | 无 | **有** |
-| 电池管理 | 无 | **TP4056** |
+16MB Flash: `factory` 1MB + `storage` 14MB (FAT 类型, 用于存放烧录的视频)。
+
+`partitions.csv` 定义了自定义分区，`sdkconfig.defaults` 中启用了 `CONFIG_PARTITION_TABLE_CUSTOM`。
 
 ## 架构
 
 ```
 main/
-├── main.c              # 入口, 已去掉 beep/XL9555
-├── video_player.c/h    # AVI/MJPEG 播放器 (双核流水线, 无缝循环)
-├── raw_player.c/h      # RAW/RGB565 播放器
-├── avi.c/h             # AVI 解析
-├── mjpeg.c/h           # JPEG 解码器 (NEW=SIMD 加速)
-├── audio.c/h           # ES8311 (已去 XL9555)
+├── main.c              # 入口: SPI→LCD→SD→搜索.raw/.avi→播放, SD无则fallback Flash
+├── video_player.c/h    # AVI/MJPEG SD卡播放器 (双核流水线, 无缝循环)
+├── raw_player.c/h      # RAW/RGB565 SD卡播放器
+├── flash_player.c/h    # Flash storage 分区播放器 (esp_partition_mmap, 零拷贝, 不占SPI2)
+├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf 全解析)
+├── mjpeg.c/h           # JPEG 解码器 (默认 esp_new_jpeg SIMD 加速)
+├── audio.c/h           # ES8311 音频 (PCM 播放 + 流式写入)
+├── reset_to_dl.c/h     # 软复位到下载模式 (RTC GPIO hold IO0+IO46→esp_restart)
+├── beep.c/h            # PWM 蜂鸣器 (IO46冲突, 未编译, 仅保留)
+├── canon.pcm           # 内嵌测试音频 (EMBED_FILES)
+├── Sequence_3s.avi     # 测试视频 (内嵌用, 未在 CMakeLists 中)
+├── idf_component.yml   # IDF 组件管理器依赖
 
 components/BSP/
-├── MYSPI/              # SPI 总线 (仅 SD 卡)
+├── SPILCD/             # LCD 8080 并口 (esp_lcd_panel_io_i80, NV3051G 驱动)
 ├── SPI_SD/             # TF 卡 (SPI/SDMMC 宏切换)
-├── SPILCD/             # LCD 8080 并口 (esp_lcd_panel_io_i80)
+├── MYSPI/              # SPI 总线 (仅 SD 卡)
 ├── MYIIC/              # I2C (仅 ES8311)
+├── KEY/                # GPIO 按键 (BOOT=IO0)
+├── LED/                # GPIO LED (IO1, 与LCD_WR冲突, 未使用)
+├── XL9555/             # I2C GPIO扩展 (旧板遗留, 仅编译未使用)
 ```
+
+## 播放器类型
+
+| 播放器 | 数据源 | 格式 | 解码 | 特点 |
+|--------|--------|------|------|------|
+| `video_player` | SD 卡 | AVI (MJPEG+PCM) | MJPEG→RGB565 | 双核流水线, 无缝循环 |
+| `raw_player` | SD 卡 | .raw (RGB565) | 无需解码 | 14B header + 原始像素, 性能最高 |
+| `flash_player` | Flash storage | AVI (MJPEG) | MJPEG→RGB565 | 零拷贝 mmap, 不占 SPI2 |
+
+`main.c` 启动流程: SPI init → LCD init → SD mount → 搜索 `.raw`(优先) 或 `.avi` → 播放; SD 失败则 fallback 到 `flash_video_play()`。
+
+## 视频转换工具 (tools/)
+
+所有工具在 `tools/` 目录下，配置文件为同目录的 `.conf` 文件。
+
+| 工具 | 用途 | 依赖 |
+|------|------|------|
+| `convert.sh` | 视频 → MJPEG AVI (SD卡播放) | ffmpeg |
+| `convert_raw.sh` | 视频 → RGB565 .raw (SD卡播放) | ffmpeg + python3 + numpy |
+| `convert_video.py` | 被 convert_raw.sh 调用, RGB888→RGB565 转换 | numpy |
+| `flash_video.sh` | 烧录 AVI 到 Flash storage 分区 | esptool, 需先 `idf.py build` |
+
+```bash
+# SD 卡播放: 转换后复制到 TF 卡根目录
+./tools/convert.sh video.mp4           # → video.avi
+./tools/convert_raw.sh video.mp4       # → video.raw
+
+# Flash 播放: 直接烧录到 ESP32
+./tools/flash_video.sh video.avi
+```
+
+`.raw` 格式 header (14B): `"RAWV"`(4) + width(2 LE) + height(2 LE) + fps(2 LE) + frames(4 LE)，然后每帧 `width*height*2` 字节 RGB565。
 
 ## JPEG 解码
 
-- **新版 esp_new_jpeg (SIMD)**: 默认, ~13ms/帧 → 20fps@320×240
+- **esp_new_jpeg (SIMD)**: 默认, ~13ms/帧 → 20fps@320×240
+- **esp_jpeg**: 备选, 传统解码器
 - 切换: `mjpeg.c` 改 `JPEG_DECODER` 宏
+- 依赖由 `main/idf_component.yml` 管理: `espressif/esp_new_jpeg` + `espressif/esp_jpeg`
+
+## UART 软复位下载
+
+`main/reset_to_dl.c` — 软件触发进入下载模式, 免手动接地 IO46:
+
+```c
+#include "reset_to_dl.h"
+reboot_to_download();  // 立即复位到烧录模式
+```
+
+原理: RTC GPIO hold 在复位期间保持 IO0+IO46 低电平, ROM bootloader 检测到后进入下载模式。
+
+开机检测示例 (加在 `main.c` 中 SPI/LCD 初始化之前):
+```c
+#include "reset_to_dl.h"
+#include "driver/gpio.h"
+
+static void check_boot_download(void) {
+    gpio_config_t cfg = { .pin_bit_mask = BIT64(0), .mode = GPIO_MODE_INPUT, .pull_up_en = true };
+    gpio_config(&cfg);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    int hold = 0;
+    while (gpio_get_level(0) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (++hold > 30) reboot_to_download();
+    }
+}
+// 在 app_main 中 SPI init 之前调用 check_boot_download();
+```
+
+CMakeLists.txt 需包含 `"reset_to_dl.c"`。
 
 ## 注意事项
 
-- 首次烧录需全量 `idf.py flash`
-- ES8311 固定 16kHz 单声道
-- Octal PSRAM 占 GPIO 26-37, 不可用
-- 新板 SD 和 LCD 不共享总线 → 无 SPI 竞争瓶颈
-- LCD 驱动在 `SPILCD/spilcd.c`, 使用 `esp_lcd_panel_io_i80` API
+- ES8311 固定 16kHz 单声道, 音频格式不匹配会静音或变速
+- Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
+- 新板 SD 和 LCD 不共享 SPI 总线 → 无 SPI 竞争瓶颈
+- LCD 驱动在 `SPILCD/spilcd.c`, 使用 `esp_lcd_panel_io_i80` API, 驱动 IC 为 NV3051G
+- BSP 组件编译选项 `-ffast-math -O3`, 禁止 format warning
+- `beep.c/h` 仅保留文件, 未编译 — IO46 已改为 USB D+, 蜂鸣器不可用
+- `XL9555` 组件仍编译但代码中未调用 — 新板用 CA51F352P4 替代
+- `.gitignore` 忽略 `近视/` `散光/` 目录 (大视频文件不入库)
+- `sample/` 为参考项目, `.gitignore` 忽略不入库
