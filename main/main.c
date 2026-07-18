@@ -3,7 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "beep.h"
+/* YT06: beep removed */
 #include "audio.h"
 #include "my_spi.h"
 #include "spilcd.h"
@@ -25,8 +25,8 @@ extern const uint8_t canon_pcm_end[] asm("_binary_canon_pcm_end");
 
 void app_main(void)
 {
-    ESP_LOGI("APP", "init beep");
-    beep_init();
+    /* beep removed */
+    /* beep_init removed */
 
     ESP_LOGI("APP", "init audio (ES8311)");
     if (audio_init() != ESP_OK)

@@ -5,8 +5,10 @@
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_log.h"
-#include "xl9555.h"
+/* YT06: XL9555 removed */
 #include "myiic.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "audio"
 
@@ -123,8 +125,8 @@ static esp_err_t init_i2s_channels(void)
 static esp_err_t init_es8311_codec(void)
 {
     // XL9555 初始化（通过 I2C0）并开启扬声器
-    ESP_ERROR_CHECK(xl9555_init());
-    xl9555_pin_write(MUTE_PIN, 1);
+    /* xl9555_init removed */
+    /* mute via CA51F352P4 */
     ESP_LOGI(TAG, "MUTE pin set to 1 (speaker enabled)");
 
     vTaskDelay(pdMS_TO_TICKS(100));
