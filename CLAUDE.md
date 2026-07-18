@@ -37,9 +37,9 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | MISO | IO14 | |
 | CS | IO0 | R20 10K 上拉 |
 | **ES8311 I2C** | SDA=IO4, SCL=IO5 | |
-| **ES8311 I2S** | MCLK=IO45 | BCLK/WS/DOUT/DIN 待确认 |
+| **ES8311 I2S** | MCLK=IO45, BCLK=IO39, WS=IO41, DOUT=IO42, DIN=IO40 |
 | **USB OTG** | D_N=IO3, D_P=IO46 | |
-| **UART** | TX=IO38, RX=IO44 | JP3 跳线 |
+| **UART1 (CA51F352P4)** | RX=IO44, TX=IO38 | JP3 跳线, TX 与 LCD_DC 共享 |
 | **JTAG** | TMS=IO42, TDI=IO41, TCK=IO40, TDO=IO39 | JP5 |
 | PSRAM (Octal) | GPIO 26-37 | 8MB, 系统占用 |
 | Flash | 内部 MSPI | 16MB, 80MHz DIO |
@@ -61,19 +61,23 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ## 架构
 
+**存储分工**: Flash = AVI 视频, SD 卡 = PCM 音频。  
+**控制方式**: UART 指令 (CA51F352P4 触控 MCU → ESP32 UART1: RX=IO44, TX=IO38)。  
+**主循环**: `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。
+
 ```
 main/
-├── main.c              # 入口: SPI→LCD→SD→搜索.raw/.avi→播放, SD无则fallback Flash
-├── video_player.c/h    # AVI/MJPEG SD卡播放器 (双核流水线, 无缝循环)
-├── raw_player.c/h      # RAW/RGB565 SD卡播放器
-├── flash_player.c/h    # Flash storage 分区播放器 (esp_partition_mmap, 零拷贝, 不占SPI2)
+├── main.c              # 协作多任务主循环 + UART 指令解析 + 状态机
+├── video_player.c/h    # SD卡 AVI 播放器 (tick化, 备份功能)
+├── raw_player.c/h      # SD卡 RAW 播放器 (tick化, 备份功能)
+├── flash_player.c/h    # Flash AVI 播放器 (tick化, 主力)
+├── audio_player.c/h    # SD卡 PCM 音频播放器 (tick化)
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf 全解析)
 ├── mjpeg.c/h           # JPEG 解码器 (默认 esp_new_jpeg SIMD 加速)
-├── audio.c/h           # ES8311 音频 (PCM 播放 + 流式写入)
+├── audio.c/h           # ES8311 音频驱动 (PCM 播放 + 流式写入)
 ├── reset_to_dl.c/h     # 软复位到下载模式 (RTC GPIO hold IO0+IO46→esp_restart)
 ├── beep.c/h            # PWM 蜂鸣器 (IO46冲突, 未编译, 仅保留)
 ├── canon.pcm           # 内嵌测试音频 (EMBED_FILES)
-├── Sequence_3s.avi     # 测试视频 (内嵌用, 未在 CMakeLists 中)
 ├── idf_component.yml   # IDF 组件管理器依赖
 
 components/BSP/
@@ -82,19 +86,68 @@ components/BSP/
 ├── MYSPI/              # SPI 总线 (仅 SD 卡)
 ├── MYIIC/              # I2C (仅 ES8311)
 ├── KEY/                # GPIO 按键 (BOOT=IO0)
-├── LED/                # GPIO LED (IO1, 与LCD_WR冲突, 未使用)
+├── LED/                # GPIO LED (IO1, 心跳指示)
 ├── XL9555/             # I2C GPIO扩展 (旧板遗留, 仅编译未使用)
 ```
 
+### 主循环 Workspace 分配
+
+| 槽位 | 功能 | 周期 |
+|------|------|------|
+| 0 | UART 指令接收 + 解析 | 5ms |
+| 1 | 应用状态机 | 5ms |
+| 2 | 播放器 tick 调度 | 5ms |
+| 3 | 系统监控 (LED心跳/堆日志) | 5ms |
+| 4 | BOOT 按键 (仅长按→DL) | 5ms |
+
+### 应用状态机
+
+```
+IDLE ──VPLAY──▶ VIDEO_PLAYING ──VPAUSE──▶ VIDEO_PAUSED
+  │                 │                          │
+  │◀──VSTOP────────┘◀──────VSTOP──────────────┘
+  │
+  ├──APLAY──▶ AUDIO_PLAYING ──ASTOP──▶ IDLE
+  │
+  └──SLEEP──▶ SLEEP ──WAKE──▶ IDLE
+```
+
+## UART 指令协议
+
+UART1: 115200-8N1, 文本协议 (`\n` 终止), RX=IO44, TX=IO38 (与 LCD_DC 共享)。
+
+| 指令 | 功能 |
+|------|------|
+| `VPLAY` | 播放 Flash 中 AVI 视频 |
+| `VPAUSE` | 暂停视频 |
+| `VRESUME` | 继续播放 |
+| `VSTOP` | 停止视频, 回空闲 |
+| `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM 文件 |
+| `ALIST` | 列出 SD 卡中 .pcm 文件 |
+| `ASTOP` | 停止音频 |
+| `AMUTE` | 静音切换 |
+| `VOL <0-100>` | 设置音量 |
+| `DL` | 软复位进入烧录模式 |
+| `RST` | 系统重启 |
+| `STATUS` | 查询播放状态 |
+| `INFO` | 查询系统信息 |
+| `SLEEP` | 关屏休眠 |
+| `WAKE` | 唤醒 |
+| `LCD ON/OFF` | 背光开关 (转发 CA51F352P4) |
+| `LCD B<0-100>` | 亮度 (转发 CA51F352P4) |
+
 ## 播放器类型
 
-| 播放器 | 数据源 | 格式 | 解码 | 特点 |
-|--------|--------|------|------|------|
-| `video_player` | SD 卡 | AVI (MJPEG+PCM) | MJPEG→RGB565 | 双核流水线, 无缝循环 |
-| `raw_player` | SD 卡 | .raw (RGB565) | 无需解码 | 14B header + 原始像素, 性能最高 |
-| `flash_player` | Flash storage | AVI (MJPEG) | MJPEG→RGB565 | 零拷贝 mmap, 不占 SPI2 |
+所有播放器已 tick 化: `_init()` → `_tick()` 每 5ms 调用 → `_stop()`，非阻塞，适合协作多任务。
 
-`main.c` 启动流程: SPI init → LCD init → SD mount → 搜索 `.raw`(优先) 或 `.avi` → 播放; SD 失败则 fallback 到 `flash_video_play()`。
+| 播放器 | 数据源 | 格式 | 角色 |
+|--------|--------|------|------|
+| `flash_player` | Flash storage | AVI (MJPEG) | **主力** 视频播放 |
+| `audio_player` | SD 卡 | PCM (16bit/mono/16kHz) | **主力** 音频播放 |
+| `video_player` | SD 卡 | AVI (MJPEG+PCM) | 备份 (不调用) |
+| `raw_player` | SD 卡 | .raw (RGB565) | 备份 (不调用) |
+
+`main.c` 启动流程: 硬件 init → SD mount → 空闲画面 → 等 UART 指令。
 
 ## 视频转换工具 (tools/)
 

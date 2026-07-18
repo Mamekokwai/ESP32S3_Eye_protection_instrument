@@ -2,12 +2,37 @@
 
 #include "esp_err.h"
 
+/* 播放器 tick 返回值 */
+typedef enum {
+    PLAYER_BUSY = 0,   /* 本次 tick 无事可做 (等待解码/等待LCD/未到帧时间) */
+    PLAYER_OK   = 1,   /* 本次 tick 完成了一帧 */
+    PLAYER_ERROR = -1, /* 不可恢复错误, 需 stop */
+} player_ret_t;
+
 /**
- * @brief  播放 SD 卡上的 AVI 视频 (MJPEG+PCM)
+ * @brief  初始化 SD 卡 AVI 播放器
  *
- * 初始化 SD 卡、LCD、音频后调用。
- * 播放 SD 卡根目录下第一个 .avi 文件。
+ * 打开文件, 解析 AVI 头, 分配缓冲, 启动 Core1 解码任务, 预读前两帧。
+ * 调用后即可用 video_player_tick() 逐帧推进。
  *
- * @return ESP_OK 成功，否则失败
+ * @param filename  VFS 路径, 如 "/0:/video.avi"
+ * @return ESP_OK 成功
  */
+esp_err_t video_player_init(const char *filename);
+
+/**
+ * @brief  推进播放器一帧 (非阻塞, 每 ~5ms 调用一次)
+ *
+ * @return PLAYER_OK    本次完成了一帧
+ *         PLAYER_BUSY  无事可做 (解码中/等LCD/等帧率)
+ *         PLAYER_ERROR 错误, 需调用 video_player_stop()
+ */
+player_ret_t video_player_tick(void);
+
+/**
+ * @brief  停止播放, 释放所有资源
+ */
+void video_player_stop(void);
+
+/* ---- 兼容旧 API (阻塞版, 仅供过渡) ---- */
 esp_err_t video_player_play(const char *filename);
