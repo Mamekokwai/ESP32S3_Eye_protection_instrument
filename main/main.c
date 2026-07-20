@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+// #include "esp_adc/adc_oneshot.h"   /* DEBUG: GPIO0 ADC 电压检测, 暂时不用 */
 #include "audio.h"
 #include "my_spi.h"
 #include "spilcd.h"
@@ -51,15 +52,41 @@ app_mode_t g_mode = MODE_IDLE;
 static uint16_t g_key_hold = 0;
 #define LONG_PRESS_TICKS ((2000 * 1000) / 5000)
 
+// static adc_oneshot_unit_handle_t s_adc1 = NULL;  /* DEBUG: GPIO0 ADC */
+
 static void key_tick(void)
 {
+#if 0  /* ---- DEBUG: GPIO0 ADC 电压检测, 暂时关闭 ---- */
+    static bool adc_inited = false;
+    if (!adc_inited) {
+        adc_oneshot_unit_init_cfg_t init_cfg = { .unit_id = ADC_UNIT_1 };
+        adc_oneshot_new_unit(&init_cfg, &s_adc1);
+        adc_oneshot_chan_cfg_t ch_cfg = {
+            .atten = ADC_ATTEN_DB_11,
+            .bitwidth = ADC_BITWIDTH_12,
+        };
+        adc_oneshot_config_channel(s_adc1, ADC_CHANNEL_0, &ch_cfg);
+        adc_inited = true;
+    }
+    static int last_mv = -1;
+    int raw, mv = 0;
+    adc_oneshot_read(s_adc1, ADC_CHANNEL_0, &raw);
+    mv = raw * 3100 / 4095;
+    if (abs(mv - last_mv) > 50) {
+        ESP_LOGI(TAG, "DEBUG GPIO0=%dmV", mv);
+        last_mv = mv;
+    }
+#endif /* ---- DEBUG END ---- */
+
     if (key_scan(0) == BOOT_PRES) {
+        if (g_key_hold == 0) app_uart_send("KEY BOOT");
         if (++g_key_hold > LONG_PRESS_TICKS) {
             extern void reboot_to_download(void);
             ESP_LOGI(TAG, "BOOT long press -> DL");
             reboot_to_download();
         }
     } else {
+        if (g_key_hold > 0) app_uart_send("KEY BOOT UP");
         g_key_hold = 0;
     }
 }
@@ -115,6 +142,11 @@ void app_main(void)
 
     spilcd_show_string(40, 140, 280, 170, 16, "ESP32-S3 Eye", BLUE);
 
+    // /* SD 初始化后 GPIO0 恢复上拉 */  /* DEBUG: GPIO0 检测暂时关闭 */
+    // gpio_reset_pin(GPIO_NUM_0);
+    // gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
+    // gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
+
     key_init();
     gpio_config_t lc = { .pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT };
     gpio_config(&lc);
@@ -131,7 +163,7 @@ void app_main(void)
     ESP_LOGI(TAG, "loop start");
 
     while (1) {
-        while (!g_tick_flag) { asm volatile("nop"); }
+        while (!g_tick_flag) { vTaskDelay(1); }
         g_tick_flag = false;
         if (++ws >= WS_NUM) ws = 0;
 

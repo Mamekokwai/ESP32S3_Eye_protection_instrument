@@ -1,8 +1,7 @@
 /**
- * @brief  LCD 驱动 (YT06 V1.1: 8080 8-bit 并口, 320x320 圆屏)
+ * @brief  LCD 驱动 (YT06 V1.1: 8080 8-bit 并口, 320x320 圆屏, JD9855 IC)
  *
- * 使用 esp_lcd_panel_io_i80 API, 替代旧板的 SPI ST7789。
- * 适配 ILI9341/ST7796 等常见 8080 并口控制器。
+ * 使用 esp_lcd_panel_io_i80 + esp_lcd_new_panel_jd9855
  */
 #include "spilcd.h"
 #include "spilcdfont.h"
@@ -11,6 +10,7 @@
 #include <math.h>
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_jd9855.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 
@@ -91,21 +91,20 @@ esp_err_t spilcd_init(void)
         .data_endian    = LCD_RGB_DATA_ENDIAN_BIG,
     };
 
-    esp_err_t ret = esp_lcd_new_panel_st7789(io_handle, &panel_cfg, &panel_handle);
+    esp_err_t ret = esp_lcd_new_panel_jd9855(io_handle, &panel_cfg, &panel_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ST7789 init failed: %d", ret);
+        ESP_LOGE(TAG, "JD9855 init failed: %d", ret);
         return ret;
     }
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
 
     spilcd_display_dir(1);
     spilcd_clear(BLACK);
 
-    ESP_LOGI(TAG, "LCD 8080 i80 init OK (320x320)");
+    ESP_LOGI(TAG, "LCD JD9855 i80 init OK (320x320)");
     return ESP_OK;
 }
 
