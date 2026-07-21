@@ -1,19 +1,23 @@
 /**
- * @brief  UART 指令系统 — 接收 CA51F352P4 指令并分发
+ * @brief  UART 指令系统 — 接收 CA51F352P4 指令, 驱动屏幕
  *
- * 协议: 文本行 (\n 终止), 大小写不敏感
+ * CA51F352P4 TX → IO44 → UART1 RX
+ * 调试输出: printf → UART0 TX (IO43)
  *
- * 指令列表:
- *   VPLAY / VPAUSE / VRESUME / VSTOP
- *   APLAY <n/fname> / ALIST / ASTOP / AMUTE / VOL <0-100>
- *   DL / RST / STATUS / INFO / SLEEP / WAKE
- *   LCD ON / LCD OFF / LCD B<0-100>
+ * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
+ *
+ * 指令: VPLAY / VPAUSE / VRESUME / VSTOP
+ *       APLAY / ALIST / ASTOP / AMUTE / VOL
+ *       DL / RST / STATUS / INFO / SLEEP / WAKE
  */
 
 #include "app_uart.h"
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+// #include <fcntl.h>    /* TODO: USB-serial-JTAG stdin */
+// #include <errno.h>
+// #include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
@@ -26,11 +30,10 @@
 
 #define TAG "uart"
 
-/* ---- UART 配置 ---- */
-#define UART_PORT UART_NUM_1
-#define UART_RX_PIN GPIO_NUM_44
-#define UART_TX_PIN GPIO_NUM_38 /* 与 LCD_DC 共享, 仅短响应 */
-#define UART_BAUD 115200
+/* ---- UART1 仅 RX ---- */
+#define UART_PORT    UART_NUM_1
+#define UART_RX_PIN  GPIO_NUM_44
+#define UART_BAUD    115200
 #define UART_BUF_SIZE 512
 
 /* ---- 指令缓冲 ---- */
@@ -51,10 +54,10 @@ extern app_mode_t g_mode;
 
 /* ====== 内部 ====== */
 
+/* printf → UART0 TX=IO43 (CA51 和电脑都收得到) */
 static void uart_send_str(const char *msg)
 {
-    uart_write_bytes(UART_PORT, msg, strlen(msg));
-    uart_write_bytes(UART_PORT, "\r\n", 2);
+    printf("%s\r\n", msg);
 }
 
 static void cmd_handle(const char *cmd)
@@ -305,33 +308,6 @@ static void cmd_handle(const char *cmd)
         return;
     }
 
-    /* === 显示控制 === */
-    if (strcasecmp(cmd, "LCD ON") == 0)
-    {
-        uart_send_str("LCD ON"); /* 转发 CA51F352P4 */
-        return;
-    }
-    if (strcasecmp(cmd, "LCD OFF") == 0)
-    {
-        uart_send_str("LCD OFF");
-        return;
-    }
-    if (strcasecmp(cmd, "LCD B") == 0)
-    {
-        uart_send_str("ERR usage: LCD B<0-100>");
-        return;
-    }
-    if (strncasecmp(cmd, "LCD B", 5) == 0)
-    {
-        int b = atoi(cmd + 5);
-        if (b < 0) b = 0;
-        if (b > 100) b = 100;
-        char r[32];
-        snprintf(r, sizeof(r), "LCD B%d", b);
-        uart_send_str(r);
-        return;
-    }
-
     /* unknown */
     char r[64];
     snprintf(r, sizeof(r), "ERR unknown: %s", cmd);
@@ -339,6 +315,27 @@ static void cmd_handle(const char *cmd)
 }
 
 /* ====== 公开 API ====== */
+
+/* ---- 单字符指令解析 ---- */
+static void feed_char(char ch)
+{
+    if (ch == '\n' || ch == '\r')
+    {
+        if (g_pos > 0)
+        {
+            g_line[g_pos] = 0;
+            while (g_pos > 0 && g_line[g_pos - 1] == ' ')
+                g_line[--g_pos] = 0;
+            if (g_pos > 0)
+                cmd_handle(g_line);
+            g_pos = 0;
+        }
+    }
+    else if (g_pos < (int)sizeof(g_line) - 1)
+    {
+        g_line[g_pos++] = ch;
+    }
+}
 
 void app_uart_init(void)
 {
@@ -352,32 +349,25 @@ void app_uart_init(void)
     };
     uart_driver_install(UART_PORT, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 0, NULL, 0);
     uart_param_config(UART_PORT, &cfg);
-    uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    ESP_LOGI(TAG, "UART1 RX=IO%d TX=IO%d @%d", UART_RX_PIN, UART_TX_PIN, UART_BAUD);
+    uart_set_pin(UART_PORT, UART_PIN_NO_CHANGE, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    // /* TODO: USB-serial-JTAG 启用后设 stdin 为非阻塞 */
+    // fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+
+    ESP_LOGI(TAG, "UART1 RX=IO%d @%d", UART_RX_PIN, UART_BAUD);
 }
 
 void app_uart_tick(void)
 {
-    uint8_t ch;
-    while (uart_read_bytes(UART_PORT, &ch, 1, 0) > 0)
-    {
-        if (ch == '\n' || ch == '\r')
-        {
-            if (g_pos > 0)
-            {
-                g_line[g_pos] = 0;
-                while (g_pos > 0 && g_line[g_pos - 1] == ' ')
-                    g_line[--g_pos] = 0;
-                if (g_pos > 0)
-                    cmd_handle(g_line);
-                g_pos = 0;
-            }
-        }
-        else if (g_pos < (int)sizeof(g_line) - 1)
-        {
-            g_line[g_pos++] = (char)ch;
-        }
-    }
+    // /* TODO: USB-serial-JTAG 启用后从 stdin 读用户指令 */
+    // char ch;
+    // while (read(STDIN_FILENO, &ch, 1) > 0)
+    //     feed_char(ch);
+
+    /* UART1 IO44 (CA51F352P4 指令) */
+    uint8_t uch;
+    while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
+        feed_char((char)uch);
 }
 
 void app_uart_send(const char *msg)

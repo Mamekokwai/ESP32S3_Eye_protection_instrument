@@ -24,12 +24,12 @@ idf.py -p /dev/ttyUSB0 flash monitor
 |---|---|---|
 | **LCD 8080 并口 ×2** | | 双 320×320 圆屏, 共享数据总线 |
 | DB0-DB7 | IO6-IO13 | 8-bit 数据总线 (两屏共享) |
-| WR | IO1 | 写信号 (两屏共享) |
+| WR | IO46 | 写信号 (两屏共享) |
 | D/C | IO38 | 数据/命令 (两屏共享) |
 | CS1 | IO17 | 左眼屏片选 |
 | CS2 | IO18 | 右眼屏片选 |
-| TE | IO48 | Tearing Effect (两屏共享) |
-| RESET | IO2 | LCD 复位 (两屏共享) |
+| TE | IO1 | Tearing Effect (两屏共享) |
+| RESET | IO3 | LCD 复位 (两屏共享) |
 | 同步方式 | CS1+CS2 同时拉低 | 写命令/数据, 两屏同画面 |
 | **SD 卡 SPI** | | 独立总线, 不共享 |
 | CLK | IO21 | |
@@ -38,8 +38,11 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | CS | IO0 | R20 10K 上拉 |
 | **ES8311 I2C** | SDA=IO4, SCL=IO5 | |
 | **ES8311 I2S** | MCLK=IO45, BCLK=IO39, WS=IO41, DOUT=IO42, DIN=IO40 |
-| **USB OTG** | D_N=IO3, D_P=IO46 | |
-| **UART1 (CA51F352P4)** | RX=IO44, TX=IO38 | JP3 跳线, TX 与 LCD_DC 共享 |
+| **USB OTG** | D_N=IO19, D_P=IO20 | |
+| **UART 共享总线** | | 三设备共享一条 UART 线路 |
+| CA51F352P4 TX → ESP32 RX | IO44 | CA51F352P4 发送指令给 ESP32 |
+| ESP32 TX (调试) → 电脑 | IO43 | ESP32 调试输出, 电脑接收 |
+| 电脑 TX → CA51F352P4 RX | IO43 | 电脑发指令给 CA51F352P4 |
 | **JTAG** | TMS=IO42, TDI=IO41, TCK=IO40, TDO=IO39 | JP5 |
 | PSRAM (Octal) | GPIO 26-37 | 8MB, 系统占用 |
 | Flash | 内部 MSPI | 16MB, 80MHz DIO |
@@ -62,12 +65,15 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ## 架构
 
 **存储分工**: Flash = AVI 视频, SD 卡 = PCM 音频。  
-**控制方式**: UART 指令 (CA51F352P4 触控 MCU → ESP32 UART1: RX=IO44, TX=IO38)。  
-**主循环**: `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。
+**控制方式**: CA51F352P4 (主芯片) 通过共享 UART 总线发指令 → ESP32 (从机) 接收并执行。  
+背光由 CA51F352P4 自己控制, ESP32 不管。  
+**主循环**: `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。  
+**FreeRTOS**: `CONFIG_FREERTOS_HZ=1000` (1 tick = 1ms, 在 `sdkconfig.defaults` 中配置)。
 
 ```
 main/
-├── main.c              # 协作多任务主循环 + UART 指令解析 + 状态机
+├── main.c              # 协作多任务主循环 + 状态机
+├── app_uart.c/h        # UART 指令接收 + 解析 + 调试输出
 ├── video_player.c/h    # SD卡 AVI 播放器 (tick化, 备份功能)
 ├── raw_player.c/h      # SD卡 RAW 播放器 (tick化, 备份功能)
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 主力)
@@ -81,13 +87,17 @@ main/
 ├── idf_component.yml   # IDF 组件管理器依赖
 
 components/BSP/
-├── SPILCD/             # LCD 8080 并口 (esp_lcd_panel_io_i80, NV3051G 驱动)
+├── SPILCD/             # LCD 8080 并口 (esp_lcd_panel_io_i80, JD9855 驱动)
 ├── SPI_SD/             # TF 卡 (SPI/SDMMC 宏切换)
 ├── MYSPI/              # SPI 总线 (仅 SD 卡)
 ├── MYIIC/              # I2C (仅 ES8311)
 ├── KEY/                # GPIO 按键 (BOOT=IO0)
 ├── LED/                # GPIO LED (IO1, 心跳指示)
 ├── XL9555/             # I2C GPIO扩展 (旧板遗留, 仅编译未使用)
+
+components/esp_lcd_jd9855/
+├── esp_lcd_jd9855.c    # JD9855 驱动 (WA54TE057I-20Z, 320x320)
+└── include/esp_lcd_jd9855.h
 ```
 
 ### 主循环 Workspace 分配
@@ -112,29 +122,44 @@ IDLE ──VPLAY──▶ VIDEO_PLAYING ──VPAUSE──▶ VIDEO_PAUSED
   └──SLEEP──▶ SLEEP ──WAKE──▶ IDLE
 ```
 
+## UART 通信架构
+
+三设备共享一条 UART 总线 (115200-8N1, 文本协议 `\n` 终止):
+
+```
+CA51F352P4 TX ──→ IO44 ──→ ESP32 UART1 RX   (指令)
+                         └──→ 电脑 USB RX    (监控)
+
+电脑 USB TX ──→ IO43 ──→ CA51F352P4 RX       (电脑发指令给 CA51)
+              └──→ 电脑终端回显
+
+ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
+                 └──→ CA51F352P4 RX           (忽略)
+```
+
+**原则**: 一发三收。ESP32 是从机, 只收 CA51F352P4 的指令, 执行后通过 UART0 回调试信息。
+
 ## UART 指令协议
 
-UART1: 115200-8N1, 文本协议 (`\n` 终止), RX=IO44, TX=IO38 (与 LCD_DC 共享)。
+| 指令 | 功能 | 响应示例 |
+|------|------|---------|
+| `VPLAY` | 播放 Flash 中 AVI 视频 | `OK VPLAY` |
+| `VPAUSE` | 暂停视频 | `OK VPAUSE` |
+| `VRESUME` | 继续播放 | `OK VRESUME` |
+| `VSTOP` | 停止视频, 回空闲 | `OK VSTOP` |
+| `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM 文件 | `OK APLAY` |
+| `ALIST` | 列出 SD 卡中 .pcm 文件 | `ALIST` + 文件列表 |
+| `ASTOP` | 停止音频 | `OK ASTOP` |
+| `AMUTE` | 静音切换 | `OK AMUTE on/off` |
+| `VOL <0-100>` | 设置音量 | `OK VOL 80` |
+| `DL` | 软复位进入烧录模式 | `OK DL` |
+| `RST` | 系统重启 | `OK RST` |
+| `STATUS` | 查询播放状态 | `STATUS idle` |
+| `INFO` | 查询系统信息 | `INFO heap=xxx` |
+| `SLEEP` | 关屏休眠 | `OK SLEEP` |
+| `WAKE` | 唤醒 | `OK WAKE` |
 
-| 指令 | 功能 |
-|------|------|
-| `VPLAY` | 播放 Flash 中 AVI 视频 |
-| `VPAUSE` | 暂停视频 |
-| `VRESUME` | 继续播放 |
-| `VSTOP` | 停止视频, 回空闲 |
-| `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM 文件 |
-| `ALIST` | 列出 SD 卡中 .pcm 文件 |
-| `ASTOP` | 停止音频 |
-| `AMUTE` | 静音切换 |
-| `VOL <0-100>` | 设置音量 |
-| `DL` | 软复位进入烧录模式 |
-| `RST` | 系统重启 |
-| `STATUS` | 查询播放状态 |
-| `INFO` | 查询系统信息 |
-| `SLEEP` | 关屏休眠 |
-| `WAKE` | 唤醒 |
-| `LCD ON/OFF` | 背光开关 (转发 CA51F352P4) |
-| `LCD B<0-100>` | 亮度 (转发 CA51F352P4) |
+ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 
 ## 播放器类型
 
@@ -180,43 +205,32 @@ UART1: 115200-8N1, 文本协议 (`\n` 终止), RX=IO44, TX=IO38 (与 LCD_DC 共�
 
 ## UART 软复位下载
 
-`main/reset_to_dl.c` — 软件触发进入下载模式, 免手动接地 IO46:
+`main/reset_to_dl.c` — 软件触发进入下载模式:
 
 ```c
 #include "reset_to_dl.h"
 reboot_to_download();  // 立即复位到烧录模式
 ```
 
-原理: RTC GPIO hold 在复位期间保持 IO0+IO46 低电平, ROM bootloader 检测到后进入下载模式。
+原理: `gpio_hold_en(GPIO_NUM_0)` + `gpio_deep_sleep_hold_en()` 在 `esp_restart()` 期间保持 IO0 低电平,
+ROM bootloader 检测到后进入下载模式。
 
-开机检测示例 (加在 `main.c` 中 SPI/LCD 初始化之前):
-```c
-#include "reset_to_dl.h"
-#include "driver/gpio.h"
-
-static void check_boot_download(void) {
-    gpio_config_t cfg = { .pin_bit_mask = BIT64(0), .mode = GPIO_MODE_INPUT, .pull_up_en = true };
-    gpio_config(&cfg);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    int hold = 0;
-    while (gpio_get_level(0) == 0) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        if (++hold > 30) reboot_to_download();
-    }
-}
-// 在 app_main 中 SPI init 之前调用 check_boot_download();
-```
-
-CMakeLists.txt 需包含 `"reset_to_dl.c"`。
+注意: ESP32-S3 只有 GPIO 0-21 是 RTC GPIO, IO46 不是, 已从代码中移除。
+开机检测 GPIO0 长按的代码已注释掉 (硬件问题: GPIO0 被 R57 0Ω 拉低, 需拆掉)。
 
 ## 注意事项
 
 - ES8311 固定 16kHz 单声道, 音频格式不匹配会静音或变速
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - 新板 SD 和 LCD 不共享 SPI 总线 → 无 SPI 竞争瓶颈
-- LCD 驱动在 `SPILCD/spilcd.c`, 使用 `esp_lcd_panel_io_i80` API, 驱动 IC 为 NV3051G
+- **LCD 驱动 IC 为 JD9855** (WA54TE057I-20Z, 320×320), 不是 NV3051G/ST7789
+- LCD 驱动在 `components/esp_lcd_jd9855/`, 初始化序列对齐原厂参考代码
+- `SPILCD/spilcd.c` 中 `LCD_DUAL` 宏控制单屏/双屏: `0`=仅 CS1 单屏测试, `1`=CS1+CS2 双屏
+- **背光由 CA51F352P4 控制** (PWM_LED → Q3 → LEDK), ESP32 不参与
+- ESP32 UART1 仅配置 RX (IO44), 不配置 TX (IO38 是 LCD D/C, 不能用作 UART TX)
+- 调试输出走 UART0 (IO43), `uart_send_str()` 在 `app_uart.c` 中
 - BSP 组件编译选项 `-ffast-math -O3`, 禁止 format warning
-- `beep.c/h` 仅保留文件, 未编译 — IO46 已改为 USB D+, 蜂鸣器不可用
+- `beep.c/h` 仅保留文件, 未编译 — IO46 已改为 USB D+
 - `XL9555` 组件仍编译但代码中未调用 — 新板用 CA51F352P4 替代
 - `.gitignore` 忽略 `近视/` `散光/` 目录 (大视频文件不入库)
 - `sample/` 为参考项目, `.gitignore` 忽略不入库

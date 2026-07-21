@@ -17,11 +17,11 @@
 #define LCD_DB5    GPIO_NUM_11
 #define LCD_DB6    GPIO_NUM_12
 #define LCD_DB7    GPIO_NUM_13
-#define LCD_WR     GPIO_NUM_1
+#define LCD_WR     GPIO_NUM_46
 #define LCD_DC     GPIO_NUM_38
 #define LCD_CS     GPIO_NUM_17    /* CS1 */
-#define LCD_TE     GPIO_NUM_48
-#define LCD_RST    GPIO_NUM_2
+#define LCD_TE     GPIO_NUM_1
+#define LCD_RST    GPIO_NUM_3
 
 /* 颜色 */
 #define WHITE  0xFFFF
@@ -39,6 +39,7 @@ extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
 
 esp_err_t spilcd_init(void);
+uint16_t lcd_color_fix(uint16_t c);  /* 限制 R 分量避免地弹 */
 void spilcd_display_dir(uint8_t dir);
 void spilcd_clear(uint16_t color);
 void spilcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color);
