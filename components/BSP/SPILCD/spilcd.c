@@ -17,7 +17,7 @@
 #include "driver/gpio.h"
 
 #define LCD_CS2 GPIO_NUM_18 /* 右眼屏片选 (和 CS1=IO17 配合) */
-#define LCD_DUAL 0          /* TODO: 0=单屏测试, 1=双屏同画面 */
+#define LCD_DUAL 1          /* 0=单屏测试, 1=双屏同画面 */
 
 #define TAG "spilcd"
 
@@ -47,6 +47,7 @@ esp_err_t spilcd_init(void)
     gpio_config(&cs2_cfg);
 #if LCD_DUAL
     gpio_set_level(LCD_CS2, 0); /* CS2 常低, 和 CS1 同步接收数据 */
+    // gpio_set_level(LCD_CS2, 1); /* CS2 常高, 不接受数据 */
     ESP_LOGI(TAG, "Dual LCD: CS1=IO%d (i80), CS2=IO%d (manual LOW)", LCD_CS, LCD_CS2);
 #else
     gpio_set_level(LCD_CS2, 1); /* CS2 高=禁用, 仅测 CS1 单屏 */
@@ -57,7 +58,7 @@ esp_err_t spilcd_init(void)
     gpio_config_t te_cfg = {
         .pin_bit_mask = BIT64(LCD_TE),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
     };
     gpio_config(&te_cfg);
@@ -382,10 +383,31 @@ void spilcd_wait_te(void)
 {
     static bool first = true;
     int64_t t0 = esp_timer_get_time();
-    if (first) {
-        ESP_LOGI(TAG, "TE pin initial level=%d (1=V-blank 0=scan)", gpio_get_level(LCD_TE));
+    if (first)
+    {
+        /* 诊断: 用最快速度采样 50ms，检测 GPIO1 是否有任何翻转 */
+        int hi = 0, lo = 0, edges = 0;
+        int prev = gpio_get_level(LCD_TE);
+        int64_t t1 = esp_timer_get_time();
+        while (esp_timer_get_time() - t1 < 50000)
+        {
+            int cur = gpio_get_level(LCD_TE);
+            if (cur)
+                hi++;
+            else
+                lo++;
+            if (cur != prev)
+                edges++;
+            prev = cur;
+        }
+        ESP_LOGI(TAG, "TE diag: hi=%d lo=%d edges=%d level=%d (pull-up %s)",
+                 hi, lo, edges, gpio_get_level(LCD_TE),
+                 (gpio_get_level(LCD_TE) == 1) ? "OK=HIGH" : "LOW=maybe open-drain w/o ext pull-up");
         first = false;
     }
+#if !LCD_TE_ENABLE
+    return; /* TE 关闭，立即返回 (延迟由上层 flash_player 智能计算) */
+#endif
     /* TE=1 = V-blank (可写入), TE=0 = 扫描中.
      * 等 TE 拉高 → V-blank 期间抢先写顶部, 扫描线在后面追.
      * 先等 TE=0 (确保不在 blank 内), 再等 TE=1 (blank 开始). */

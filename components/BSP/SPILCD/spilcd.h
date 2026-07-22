@@ -23,6 +23,9 @@
 #define LCD_TE     GPIO_NUM_1
 #define LCD_RST    GPIO_NUM_3
 
+/* TE 帧同步开关: 0=关闭, 1=开启 (需同时改 esp_lcd_jd9855.c 中 0x35 参数) */
+#define LCD_TE_ENABLE 0
+
 /* 颜色 */
 #define WHITE  0xFFFF
 #define BLACK  0x0000

@@ -105,9 +105,15 @@ static void __attribute__((unused)) diag_fill_test(const char *label, buf_type_t
     heap_caps_free(buf);
 }
 
-/* ====== 1ms Tick ====== */
-static volatile bool g_tick_flag = false;
-static void tick_isr(void *arg) { g_tick_flag = true; }
+/* ====== 1ms Tick (Semaphore, 不忙等, 不丢 tick) ====== */
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_tick_sem = NULL;
+static void IRAM_ATTR tick_isr(void *arg)
+{
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_tick_sem, &woken);
+    if (woken) portYIELD_FROM_ISR();
+}
 
 /* ====== Workspace ====== */
 typedef enum
@@ -267,15 +273,18 @@ void app_main(void)
     key_init();
     // gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
     // gpio_config(&lc);
-    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);  // LED 改用 IO2
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT); // LED 改用 IO2
 
     app_uart_init();
 
     /* 上电自动播放 */
-    if (flash_player_init() == ESP_OK) {
+    if (flash_player_init() == ESP_OK)
+    {
         g_mode = MODE_VIDEO_PLAYING;
         ESP_LOGI(TAG, "Auto VPLAY OK");
     }
+
+    s_tick_sem = xSemaphoreCreateBinary();
 
     esp_timer_create_args_t ta = {.callback = tick_isr, .name = "tick"};
     esp_timer_handle_t tt;
@@ -290,12 +299,7 @@ void app_main(void)
 
     while (1)
     {
-        // 1ms tick
-        while (!g_tick_flag)
-        {
-            vTaskDelay(1);
-        }
-        g_tick_flag = false;
+        xSemaphoreTake(s_tick_sem, portMAX_DELAY);  /* 阻塞等 1ms tick, 让出 CPU 给 idle */
         if (++ws >= WS_NUM)
             ws = 0;
         // 颜色测试
@@ -306,12 +310,12 @@ void app_main(void)
         //      ESP_LOGI(TAG, "测试信息");
         //  }
 
-        // // 1S打印一次日志 不要删除
-        // if (++test1 >= 1000)
-        // {
-        //     test1 = 0;
-        //     ESP_LOGI(TAG, "测试信息");
-        // }
+        // 1S打印一次日志 不要删除
+        if (++test1 >= 1000)
+        {
+            test1 = 0;
+            ESP_LOGI(TAG, "测试信息");
+        }
 
         switch (ws)
         {
