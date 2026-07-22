@@ -15,8 +15,8 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 
-#define LCD_CS2   GPIO_NUM_18   /* 右眼屏片选 (和 CS1=IO17 配合) */
-#define LCD_DUAL  0              /* TODO: 0=单屏测试, 1=双屏同画面 */
+#define LCD_CS2 GPIO_NUM_18 /* 右眼屏片选 (和 CS1=IO17 配合) */
+#define LCD_DUAL 0          /* TODO: 0=单屏测试, 1=双屏同画面 */
 
 #define TAG "spilcd"
 
@@ -25,8 +25,8 @@ esp_lcd_panel_handle_t panel_handle = NULL;
 _spilcd_dev spilcddev;
 
 static bool notify_lcd_flush_ready(esp_lcd_panel_io_handle_t io,
-                                    esp_lcd_panel_io_event_data_t *edata,
-                                    void *user_ctx)
+                                   esp_lcd_panel_io_event_data_t *edata,
+                                   void *user_ctx)
 {
     refresh_done_flag = 1;
     return false;
@@ -45,10 +45,10 @@ esp_err_t spilcd_init(void)
     };
     gpio_config(&cs2_cfg);
 #if LCD_DUAL
-    gpio_set_level(LCD_CS2, 0);  /* CS2 常低, 和 CS1 同步接收数据 */
+    gpio_set_level(LCD_CS2, 0); /* CS2 常低, 和 CS1 同步接收数据 */
     ESP_LOGI(TAG, "Dual LCD: CS1=IO%d (i80), CS2=IO%d (manual LOW)", LCD_CS, LCD_CS2);
 #else
-    gpio_set_level(LCD_CS2, 1);  /* CS2 高=禁用, 仅测 CS1 单屏 */
+    gpio_set_level(LCD_CS2, 1); /* CS2 高=禁用, 仅测 CS1 单屏 */
     ESP_LOGI(TAG, "Single LCD: CS1=IO%d (i80), CS2=IO%d (disabled)", LCD_CS, LCD_CS2);
 #endif
 
@@ -57,31 +57,37 @@ esp_err_t spilcd_init(void)
     esp_lcd_i80_bus_config_t bus_cfg = {
         .dc_gpio_num = LCD_DC,
         .wr_gpio_num = LCD_WR,
-        .clk_src     = LCD_CLK_SRC_DEFAULT,
+        .clk_src = LCD_CLK_SRC_DEFAULT,
         .data_gpio_nums = {
-            LCD_DB0, LCD_DB1, LCD_DB2, LCD_DB3,
-            LCD_DB4, LCD_DB5, LCD_DB6, LCD_DB7,
+            LCD_DB0,
+            LCD_DB1,
+            LCD_DB2,
+            LCD_DB3,
+            LCD_DB4,
+            LCD_DB5,
+            LCD_DB6,
+            LCD_DB7,
         },
-        .bus_width   = 8,
+        .bus_width = 8,
         .max_transfer_bytes = 320 * 320 * 2,
-        .psram_trans_align  = 64,
-        .sram_trans_align   = 4,
+        .psram_trans_align = 64,
+        .sram_trans_align = 4,
     };
     ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_cfg, &i80_bus));
 
     /* 2. 创建 panel IO */
     esp_lcd_panel_io_i80_config_t io_cfg = {
         .cs_gpio_num = LCD_CS,
-        .pclk_hz     = 10 * 1000 * 1000,  /* 10MHz 写时钟 */
+        .pclk_hz = 40 * 1000 * 1000, /* 40MHz 写时钟 (降低地弹) */
         .trans_queue_depth = 7,
         .on_color_trans_done = notify_lcd_flush_ready,
         .dc_levels = {
-            .dc_idle_level  = 0,
-            .dc_cmd_level   = 0,
+            .dc_idle_level = 0,
+            .dc_cmd_level = 0,
             .dc_dummy_level = 0,
-            .dc_data_level  = 1,
+            .dc_data_level = 1,
         },
-        .lcd_cmd_bits   = 8,
+        .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .flags = {
             .swap_color_bytes = 1,
@@ -91,18 +97,19 @@ esp_err_t spilcd_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_cfg, &io_handle));
 
     /* 3. LCD 面板配置 */
-    spilcddev.pwidth  = 320;
+    spilcddev.pwidth = 320;
     spilcddev.pheight = 320;
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = LCD_RST,
-        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
-        .data_endian    = LCD_RGB_DATA_ENDIAN_BIG,
+        .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
     };
 
     esp_err_t ret = esp_lcd_new_panel_jd9855(io_handle, &panel_cfg, &panel_handle);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "JD9855 init failed: %d", ret);
         return ret;
     }
@@ -121,46 +128,58 @@ esp_err_t spilcd_init(void)
 void spilcd_display_dir(uint8_t dir)
 {
     spilcddev.dir = dir;
-    if (dir == 0) {
-        spilcddev.width  = spilcddev.pheight;
+    if (dir == 0)
+    {
+        spilcddev.width = spilcddev.pheight;
         spilcddev.height = spilcddev.pwidth;
         esp_lcd_panel_swap_xy(panel_handle, false);
         esp_lcd_panel_mirror(panel_handle, false, false);
-    } else {
-        spilcddev.width  = spilcddev.pwidth;
+    }
+    else
+    {
+        spilcddev.width = spilcddev.pwidth;
         spilcddev.height = spilcddev.pheight;
         esp_lcd_panel_swap_xy(panel_handle, true);
         esp_lcd_panel_mirror(panel_handle, true, false);
     }
 }
 
-/* 避免 0xF8 位模式引发地弹/SSN: 限制 R 分量 ≤ 28 */
-uint16_t lcd_color_fix(uint16_t c)
-{
-    if ((c >> 11) >= 29)  /* R=29-31 时第一个字节含 ≥4 个连续 1, 触发信号完整性问题 */
-        c = (c & 0x07FF) | 0xE000;  /* R=28 */
-    return c;
-}
-
 void spilcd_clear(uint16_t color)
 {
-    uint16_t c = lcd_color_fix(color);
-    uint16_t *buf = heap_caps_malloc(spilcddev.width * spilcddev.height * sizeof(uint16_t), MALLOC_CAP_DMA);
+    uint16_t *buf = heap_caps_malloc(spilcddev.width * 40 * sizeof(uint16_t), MALLOC_CAP_DMA);
     if (!buf) return;
-    for (int i = 0; i < spilcddev.width * spilcddev.height; i++) buf[i] = c;
-    refresh_done_flag = 0;
-    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, spilcddev.width, spilcddev.height, buf);
-    while (!refresh_done_flag) vTaskDelay(1);
+    for (int i = 0; i < spilcddev.width * 40; i++) buf[i] = color;
+    for (int y = 0; y < spilcddev.height; y += 40) {
+        refresh_done_flag = 0;
+        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, spilcddev.width, y + 40, buf);
+        while (!refresh_done_flag) vTaskDelay(1);
+    }
     heap_caps_free(buf);
 }
 
+void spilcd_fill_raw(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color); /* 不做颜色修正 */
+
 void spilcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color)
 {
-    uint16_t c = lcd_color_fix(color);
     uint16_t w = ex - sx, h = ey - sy;
     uint16_t *buf = heap_caps_malloc(w * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    if (!buf) return;
-    for (int i = 0; i < w; i++) buf[i] = c;
+    if (!buf)
+        return;
+    for (int i = 0; i < w; i++)
+        buf[i] = color;
+    for (int y = 0; y < h; y++)
+        esp_lcd_panel_draw_bitmap(panel_handle, sx, sy + y, ex, sy + y + 1, buf);
+    heap_caps_free(buf);
+}
+
+void spilcd_fill_raw(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color)
+{
+    uint16_t w = ex - sx, h = ey - sy;
+    uint16_t *buf = heap_caps_malloc(w * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
+    if (!buf)
+        return;
+    for (int i = 0; i < w; i++)
+        buf[i] = color; /* 原始颜色, 不修正 */
     for (int y = 0; y < h; y++)
         esp_lcd_panel_draw_bitmap(panel_handle, sx, sy + y, ex, sy + y + 1, buf);
     heap_caps_free(buf);
@@ -168,8 +187,7 @@ void spilcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t co
 
 void spilcd_draw_point(uint16_t x, uint16_t y, uint16_t color)
 {
-    uint16_t c = lcd_color_fix(color);
-    esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + 1, y + 1, &c);
+    esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + 1, y + 1, &color);
 }
 
 /* 以下函数和旧版相同, 只保留接口兼容性 */
@@ -178,18 +196,29 @@ void spilcd_draw_line(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16
     int dx = abs(x2 - x1), dy = abs(y2 - y1);
     int sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
     int err = dx - dy;
-    while (1) {
+    while (1)
+    {
         spilcd_draw_point(x1, y1, color);
-        if (x1 == x2 && y1 == y2) break;
+        if (x1 == x2 && y1 == y2)
+            break;
         int e2 = err * 2;
-        if (e2 > -dy) { err -= dy; x1 += sx; }
-        if (e2 < dx)  { err += dx; y1 += sy; }
+        if (e2 > -dy)
+        {
+            err -= dy;
+            x1 += sx;
+        }
+        if (e2 < dx)
+        {
+            err += dx;
+            y1 += sy;
+        }
     }
 }
 
 void spilcd_draw_hline(uint16_t x, uint16_t y, uint16_t len, uint16_t color)
 {
-    if (len == 0 || x >= spilcddev.width || y >= spilcddev.height) return;
+    if (len == 0 || x >= spilcddev.width || y >= spilcddev.height)
+        return;
     uint16_t ex = fmin(spilcddev.width - 1, x + len - 1);
     spilcd_fill(x, y, ex + 1, y + 1, color);
 }
@@ -205,21 +234,32 @@ void spilcd_draw_rectangle(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, u
 void spilcd_draw_circle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color)
 {
     int a = 0, b = r, di = 3 - (r << 1);
-    while (a <= b) {
-        spilcd_draw_point(x0 + a, y0 + b, color); spilcd_draw_point(x0 - a, y0 + b, color);
-        spilcd_draw_point(x0 + a, y0 - b, color); spilcd_draw_point(x0 - a, y0 - b, color);
-        spilcd_draw_point(x0 + b, y0 + a, color); spilcd_draw_point(x0 - b, y0 + a, color);
-        spilcd_draw_point(x0 + b, y0 - a, color); spilcd_draw_point(x0 - b, y0 - a, color);
+    while (a <= b)
+    {
+        spilcd_draw_point(x0 + a, y0 + b, color);
+        spilcd_draw_point(x0 - a, y0 + b, color);
+        spilcd_draw_point(x0 + a, y0 - b, color);
+        spilcd_draw_point(x0 - a, y0 - b, color);
+        spilcd_draw_point(x0 + b, y0 + a, color);
+        spilcd_draw_point(x0 - b, y0 + a, color);
+        spilcd_draw_point(x0 + b, y0 - a, color);
+        spilcd_draw_point(x0 - b, y0 - a, color);
         a++;
-        if (di < 0) di += 4 * a + 6;
-        else { di += 10 + 4 * (a - b); b--; }
+        if (di < 0)
+            di += 4 * a + 6;
+        else
+        {
+            di += 10 + 4 * (a - b);
+            b--;
+        }
     }
 }
 
 void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t mode, uint16_t color)
 {
     /* 逐行 buffer → draw_bitmap, 和 spilcd_fill 方式一致 */
-    if (chr < 32 || chr > 126) chr = 32;
+    if (chr < 32 || chr > 126)
+        chr = 32;
     uint8_t idx = chr - 32;
     uint8_t ch_width = size / 2;
     uint8_t ch_height = size;
@@ -228,35 +268,47 @@ void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t
 
     switch (size)
     {
-    case 12: font = (uint8_t *)asc2_1206[idx]; break;
-    case 16: font = (uint8_t *)asc2_1608[idx]; break;
-    case 24: font = (uint8_t *)asc2_2412[idx]; break;
-    case 32: font = (uint8_t *)asc2_3216[idx]; break;
-    default: return;
+    case 12:
+        font = (uint8_t *)asc2_1206[idx];
+        break;
+    case 16:
+        font = (uint8_t *)asc2_1608[idx];
+        break;
+    case 24:
+        font = (uint8_t *)asc2_2412[idx];
+        break;
+    case 32:
+        font = (uint8_t *)asc2_3216[idx];
+        break;
+    default:
+        return;
     }
 
     uint16_t bg = 0xFFFF; /* 白色背景 */
     uint16_t *row_buf = heap_caps_malloc(ch_width * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    if (!row_buf) return;
+    if (!row_buf)
+        return;
 
     for (int row = 0; row < ch_height; row++)
     {
         for (int col = 0; col < ch_width; col++)
         {
             uint8_t byte_pos = row * byte_width + col / 8;
-            if (size == 24 && (byte_pos % 2) && col % 8 >= 4) {
+            if (size == 24 && (byte_pos % 2) && col % 8 >= 4)
+            {
                 row_buf[col] = bg;
                 continue;
             }
             uint8_t bit_pos = 7 - (col % 8);
             if (font[byte_pos] & (1 << bit_pos))
-                row_buf[col] = lcd_color_fix(color);
+                row_buf[col] = color;
             else if (mode == 0)
                 row_buf[col] = bg;
         }
         refresh_done_flag = 0;
         esp_lcd_panel_draw_bitmap(panel_handle, x, y + row, x + ch_width, y + row + 1, row_buf);
-        while (!refresh_done_flag) vTaskDelay(1);  /* 等每行传完 */
+        while (!refresh_done_flag)
+            vTaskDelay(1); /* 等每行传完 */
     }
     heap_caps_free(row_buf);
 }
@@ -264,7 +316,8 @@ void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t
 static uint32_t lcd_pow(uint8_t m, uint8_t n)
 {
     uint32_t result = 1;
-    while (n--) result *= m;
+    while (n--)
+        result *= m;
     return result;
 }
 
@@ -277,10 +330,13 @@ void spilcd_show_num(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t 
         temp = (num / lcd_pow(10, len - t - 1)) % 10;
         if (enshow == 0 && t < (len - 1))
         {
-            if (temp == 0) {
+            if (temp == 0)
+            {
                 spilcd_show_char(x + (size / 2) * t, y, ' ', size, 0, color);
                 continue;
-            } else enshow = 1;
+            }
+            else
+                enshow = 1;
         }
         spilcd_show_char(x + (size / 2) * t, y, temp + '0', size, 0, color);
     }
@@ -293,8 +349,13 @@ void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
     height += y;
     while ((*p <= '~') && (*p >= ' '))
     {
-        if (x >= width) { x = x0; y += size; }
-        if (y >= height) break;
+        if (x >= width)
+        {
+            x = x0;
+            y += size;
+        }
+        if (y >= height)
+            break;
         spilcd_show_char(x, y, *p, size, 0, color);
         x += size / 2;
         p++;

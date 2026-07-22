@@ -21,7 +21,7 @@
 #include <string.h>
 
 #define TAG "flash_player"
-#define FRAME_BUF_SIZE  (320 * 240 * sizeof(uint16_t))
+#define FRAME_BUF_SIZE  (320 * 320 * sizeof(uint16_t))  /* 320x320 RGB565 */
 #define MAX_JPEG_SIZE   (48 * 1024)
 #define PROF_EVERY      10
 
@@ -177,7 +177,7 @@ esp_err_t flash_player_init(void)
         spi_flash_munmap(g_fp.mmap_handle);
         return ESP_FAIL;
     }
-    if (g_fp.avi.Width > 320 || g_fp.avi.Height > 240) {
+    if (g_fp.avi.Width > 320 || g_fp.avi.Height > 320) {
         spi_flash_munmap(g_fp.mmap_handle);
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -212,7 +212,7 @@ esp_err_t flash_player_init(void)
     xQueueSend(s_q, &job0, 0);
 
     g_fp.offx     = (320 - g_fp.avi.Width) / 2;
-    g_fp.offy     = (240 - g_fp.avi.Height) / 2;
+    g_fp.offy     = (320 - g_fp.avi.Height) / 2;  /* 320x320 圆屏 */
     g_fp.first_vf  = true;
     g_fp.have_next = true;
     g_fp.pending   = 1;
@@ -276,12 +276,19 @@ player_ret_t flash_player_tick(void)
     if (!lcd_is_ready())
         return PLAYER_BUSY;
 
-    /* Step F: 发送帧到 LCD */
-    esp_lcd_panel_draw_bitmap(panel_handle,
-                               g_fp.offx, g_fp.offy,
-                               g_fp.offx + g_fp.avi.Width,
-                               g_fp.offy + g_fp.avi.Height,
-                               g_fp.frame_buf[g_fp.cur]);
+    /* Step F: 发送帧到 LCD (分 4 片, 避免 GDMA link 溢出) */
+    #define FP_STRIP_H 80
+    uint16_t *fb = (uint16_t *)g_fp.frame_buf[g_fp.cur];
+    for (int ys = 0; ys < g_fp.avi.Height; ys += FP_STRIP_H) {
+        int h = (ys + FP_STRIP_H > g_fp.avi.Height) ? g_fp.avi.Height - ys : FP_STRIP_H;
+        refresh_done_flag = 0;
+        esp_lcd_panel_draw_bitmap(panel_handle,
+                                   g_fp.offx, g_fp.offy + ys,
+                                   g_fp.offx + g_fp.avi.Width,
+                                   g_fp.offy + ys + h,
+                                   fb + ys * g_fp.avi.Width);
+        while (!refresh_done_flag) vTaskDelay(1);
+    }
     g_fp.frame_count++;
 
     if (g_fp.frame_count % PROF_EVERY == 0) {

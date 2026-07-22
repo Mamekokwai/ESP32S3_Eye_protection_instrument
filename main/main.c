@@ -158,12 +158,25 @@ void app_main(void)
     ESP_LOGI(TAG, "SD mount...");
     sd_spi_init(); /* 音频用, 失败不阻塞 */
 
-    /* 五色条带测试: RED GREEN BLUE BLACK WHITE (L→R) */
-    uint16_t colors[] = {RED, GREEN, BLUE, BLACK, WHITE};
-    int n = sizeof(colors) / sizeof(colors[0]);
-    int sw = 320 / n;
-    for (int i = 0; i < n; i++)
-        spilcd_fill(i * sw, 0, (i + 1) * sw, 320, colors[i]);
+    /* 显示测试图片 */
+    {
+        extern const uint8_t testimage_data[];
+        #define IMG_STRIP_H 20
+        uint16_t *buf = heap_caps_malloc(320 * IMG_STRIP_H * sizeof(uint16_t), MALLOC_CAP_DMA);
+        if (!buf) {
+            ESP_LOGE(TAG, "DMA buf alloc failed");
+        } else {
+            for (int y = 0; y < 320; y += IMG_STRIP_H) {
+                int h = (y + IMG_STRIP_H > 320) ? 320 - y : IMG_STRIP_H;
+                memcpy(buf, testimage_data + y * 320 * 2, 320 * h * 2);
+                refresh_done_flag = 0;
+                esp_lcd_panel_draw_bitmap(panel_handle, 0, y, 320, y + h, buf);
+                while (!refresh_done_flag) vTaskDelay(1);
+            }
+            heap_caps_free(buf);
+            ESP_LOGI(TAG, "image draw done");
+        }
+    }
 
     // /* SD 初始化后 GPIO0 恢复上拉 */  /* DEBUG: GPIO0 检测暂时关闭 */
     // gpio_reset_pin(GPIO_NUM_0);
@@ -185,10 +198,11 @@ void app_main(void)
     static uint8_t ws = WS_NUM - 1;
     ESP_LOGI(TAG, "loop start");
 
-    // static uint16_t test1 = 0;
+    static uint16_t test1 = 0;
 
     while (1)
     {
+        // 1ms tick
         while (!g_tick_flag)
         {
             vTaskDelay(1);
@@ -196,6 +210,13 @@ void app_main(void)
         g_tick_flag = false;
         if (++ws >= WS_NUM)
             ws = 0;
+        // 颜色测试
+        //  if (++test1 >= 1000)
+        //  {
+        //      test1 = 0;
+        //      spilcd_fill_raw(0, 0, 320, 320, 0XF800); /* 测试: 每 10ms 填充红色 */
+        //      ESP_LOGI(TAG, "测试信息");
+        //  }
 
         // // 1S打印一次日志 不要删除
         // if (++test1 >= 1000)

@@ -39,10 +39,10 @@ extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
 
 esp_err_t spilcd_init(void);
-uint16_t lcd_color_fix(uint16_t c);  /* 限制 R 分量避免地弹 */
 void spilcd_display_dir(uint8_t dir);
 void spilcd_clear(uint16_t color);
 void spilcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color);
+void spilcd_fill_raw(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color);  /* 不修正颜色 */
 void spilcd_draw_point(uint16_t x, uint16_t y, uint16_t color);
 void spilcd_draw_line(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
 void spilcd_draw_hline(uint16_t x, uint16_t y, uint16_t len, uint16_t color);

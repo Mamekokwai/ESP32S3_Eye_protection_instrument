@@ -72,7 +72,7 @@ static jpeg_dec_handle_t s_dec = NULL;
 esp_err_t mjpeg_decoder_init(uint32_t max_width, uint32_t max_height)
 {
     jpeg_dec_config_t cfg = DEFAULT_JPEG_DEC_CONFIG();
-    cfg.output_type = JPEG_PIXEL_FORMAT_RGB565_BE;
+    cfg.output_type = JPEG_PIXEL_FORMAT_RGB565_LE;  /* LE, 配合 spilcd swap_color_bytes=1 */
     jpeg_error_t ret = jpeg_dec_open(&cfg, &s_dec);
     if (ret != JPEG_ERR_OK)
     {
