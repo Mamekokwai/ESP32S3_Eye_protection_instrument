@@ -51,5 +51,6 @@ void spilcd_draw_circle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color);
 void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t mode, uint16_t color);
 void spilcd_show_num(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t size, uint16_t color);
 void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint8_t size, char *p, uint16_t color);
+void spilcd_wait_te(void);  /* TE 帧同步 */
 
 #endif

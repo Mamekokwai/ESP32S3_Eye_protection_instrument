@@ -14,6 +14,7 @@
 #include "spi_flash_mmap.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_cache.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -24,6 +25,7 @@
 #define FRAME_BUF_SIZE  (320 * 320 * sizeof(uint16_t))  /* 320x320 RGB565 */
 #define MAX_JPEG_SIZE   (48 * 1024)
 #define PROF_EVERY      10
+#define DBG_FRAMES      5   /* 前 N 帧打印调试信息 */
 
 extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
@@ -66,6 +68,18 @@ static bool read_chunk_mmap(mmap_file_t *mf, AVI_INFO *avi,
             if (sz <= MAX_JPEG_SIZE) {
                 memcpy(jpeg_out, mf->data + mf->pos, sz);
                 *jpeg_sz_out = sz;
+                /* DBG: 打印源 JPEG 数据前 16 字节 */
+                static int dbg_jpeg_cnt = 0;
+                if (dbg_jpeg_cnt < DBG_FRAMES) {
+                    ESP_LOGI(TAG, "JPEG src[%d] sz=%u: %02x %02x %02x %02x %02x %02x %02x %02x "
+                             "%02x %02x %02x %02x %02x %02x %02x %02x",
+                             dbg_jpeg_cnt, (unsigned)sz,
+                             jpeg_out[0], jpeg_out[1], jpeg_out[2], jpeg_out[3],
+                             jpeg_out[4], jpeg_out[5], jpeg_out[6], jpeg_out[7],
+                             jpeg_out[8], jpeg_out[9], jpeg_out[10], jpeg_out[11],
+                             jpeg_out[12], jpeg_out[13], jpeg_out[14], jpeg_out[15]);
+                    dbg_jpeg_cnt++;
+                }
             }
             mf->pos += sz;
             if (sz & 1) mf->pos++;
@@ -189,7 +203,7 @@ esp_err_t flash_player_init(void)
     xTaskCreatePinnedToCore(decode_task, "jpeg_f", 4096, NULL, 5, &s_task, 1);
 
     for (int i = 0; i < 2; i++) {
-        g_fp.frame_buf[i] = heap_caps_aligned_alloc(16, FRAME_BUF_SIZE, MALLOC_CAP_SPIRAM);
+        g_fp.frame_buf[i] = heap_caps_aligned_alloc(64, FRAME_BUF_SIZE, MALLOC_CAP_SPIRAM);  /* DMA 需 64B 对齐 */
         g_fp.jpeg_buf[i]  = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM);
         if (!g_fp.frame_buf[i] || !g_fp.jpeg_buf[i]) {
             ret = ESP_ERR_NO_MEM; goto fail;
@@ -235,10 +249,15 @@ player_ret_t flash_player_tick(void)
 {
     if (!g_fp.initialized) return PLAYER_ERROR;
 
+    static int64_t t_dec, t_read, t_lcd, t_te, t_ctl;
+    int64_t t0;
+
     /* Step A: 非阻塞检查解码完成 */
+    t0 = esp_timer_get_time();
     if (xSemaphoreTake(s_done, 0) != pdTRUE)
         return PLAYER_BUSY;
     g_fp.pending--;
+    t_dec += esp_timer_get_time() - t0;
 
     /* Step B: 提交下一帧解码 */
     if (g_fp.have_next) {
@@ -251,6 +270,7 @@ player_ret_t flash_player_tick(void)
     }
 
     /* Step C: 预读下一帧 */
+    t0 = esp_timer_get_time();
     g_fp.have_next = read_chunk_mmap(&g_fp.mf, &g_fp.avi,
                                       g_fp.jpeg_buf[g_fp.cur],
                                       &g_fp.jpeg_size[g_fp.cur]);
@@ -261,8 +281,10 @@ player_ret_t flash_player_tick(void)
                                           &g_fp.jpeg_size[g_fp.cur]);
         g_fp.wraps++;
     }
+    t_read += esp_timer_get_time() - t0;
 
     /* Step D: 非阻塞帧率控制 */
+    t0 = esp_timer_get_time();
     if (!g_fp.first_vf) {
         if (esp_timer_get_time() < g_fp.next_ts)
             return PLAYER_BUSY;
@@ -271,15 +293,24 @@ player_ret_t flash_player_tick(void)
         g_fp.first_vf = false;
         g_fp.next_ts = esp_timer_get_time() + g_fp.avi.SecPerFrame;
     }
+    t_ctl += esp_timer_get_time() - t0;
 
     /* Step E: 非阻塞 LCD TE 同步 */
     if (!lcd_is_ready())
         return PLAYER_BUSY;
 
-    /* Step F: 发送帧到 LCD (分 4 片, 避免 GDMA link 溢出) */
+    /* Step E2: TE 帧同步 */
+    t0 = esp_timer_get_time();
+    // spilcd_wait_te();
+    t_te += esp_timer_get_time() - t0;
+
+    /* Step F: 发送帧到 LCD (拆条, PSRAM DMA) */
+    t0 = esp_timer_get_time();
     #define FP_STRIP_H 80
     uint16_t *fb = (uint16_t *)g_fp.frame_buf[g_fp.cur];
-    for (int ys = 0; ys < g_fp.avi.Height; ys += FP_STRIP_H) {
+    size_t fb_bytes = g_fp.avi.Height * g_fp.avi.Width * sizeof(uint16_t);
+    esp_cache_msync(fb, fb_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);  /* CPU→DMA */
+    for (int ys = 0; ys < (int)g_fp.avi.Height; ys += FP_STRIP_H) {
         int h = (ys + FP_STRIP_H > g_fp.avi.Height) ? g_fp.avi.Height - ys : FP_STRIP_H;
         refresh_done_flag = 0;
         esp_lcd_panel_draw_bitmap(panel_handle,

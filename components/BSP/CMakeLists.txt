@@ -21,6 +21,7 @@ set(requires
             fatfs
             esp_lcd
             sdmmc
+	            esp_timer
             esp_lcd_jd9855)
 
 idf_component_register(SRC_DIRS ${src_dirs} INCLUDE_DIRS ${include_dirs} REQUIRES ${requires})

@@ -229,7 +229,8 @@ static const jd9855_lcd_init_cmd_t vendor_specific_init_default[] = {
     {0x4C, (uint8_t[]){0x00}, 1, 0},
     {0x2A, (uint8_t[]){0x00,0x00,0x01,0x3F}, 4, 0},
     {0x2B, (uint8_t[]){0x00,0x00,0x01,0x3F}, 4, 0},
-    {0x35, (uint8_t[]){}, 0, 0},
+    {0x35, (uint8_t[]){0x01}, 1, 0},    /* TE ON, V-blank pulse */
+{0x44, (uint8_t[]){0x01, 0x3F}, 2, 0},  /* TE scanline = 319 (末行) */
     {0x36, (uint8_t[]){0x00}, 1, 0},
     {0x3A, (uint8_t[]){0x55}, 1, 0},           // 55=RGB565, 66=RGB666
 

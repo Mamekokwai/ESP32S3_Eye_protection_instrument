@@ -13,6 +13,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_jd9855.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
 
 #define LCD_CS2 GPIO_NUM_18 /* 右眼屏片选 (和 CS1=IO17 配合) */
@@ -52,6 +53,15 @@ esp_err_t spilcd_init(void)
     ESP_LOGI(TAG, "Single LCD: CS1=IO%d (i80), CS2=IO%d (disabled)", LCD_CS, LCD_CS2);
 #endif
 
+    /* TE 引脚配置 (IO1, LCD tearing effect 输入) */
+    gpio_config_t te_cfg = {
+        .pin_bit_mask = BIT64(LCD_TE),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    gpio_config(&te_cfg);
+
     /* 1. 创建 i80 总线 */
     esp_lcd_i80_bus_handle_t i80_bus = NULL;
     esp_lcd_i80_bus_config_t bus_cfg = {
@@ -78,7 +88,7 @@ esp_err_t spilcd_init(void)
     /* 2. 创建 panel IO */
     esp_lcd_panel_io_i80_config_t io_cfg = {
         .cs_gpio_num = LCD_CS,
-        .pclk_hz = 40 * 1000 * 1000, /* 40MHz 写时钟 (降低地弹) */
+        .pclk_hz = 40 * 1000 * 1000, /* 40MHz 写时钟 <50MHZ */
         .trans_queue_depth = 7,
         .on_color_trans_done = notify_lcd_flush_ready,
         .dc_levels = {
@@ -147,12 +157,16 @@ void spilcd_display_dir(uint8_t dir)
 void spilcd_clear(uint16_t color)
 {
     uint16_t *buf = heap_caps_malloc(spilcddev.width * 40 * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (!buf) return;
-    for (int i = 0; i < spilcddev.width * 40; i++) buf[i] = color;
-    for (int y = 0; y < spilcddev.height; y += 40) {
+    if (!buf)
+        return;
+    for (int i = 0; i < spilcddev.width * 40; i++)
+        buf[i] = color;
+    for (int y = 0; y < spilcddev.height; y += 40)
+    {
         refresh_done_flag = 0;
         esp_lcd_panel_draw_bitmap(panel_handle, 0, y, spilcddev.width, y + 40, buf);
-        while (!refresh_done_flag) vTaskDelay(1);
+        while (!refresh_done_flag)
+            vTaskDelay(1);
     }
     heap_caps_free(buf);
 }
@@ -359,5 +373,26 @@ void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
         spilcd_show_char(x, y, *p, size, 0, color);
         x += size / 2;
         p++;
+    }
+}
+
+/* ---- TE 帧同步: 等待 LCD 垂直消隐, 抢先写入 ---- */
+/* ---- TE 帧同步: 等待 LCD 垂直消隐, 抢先写入 ---- */
+void spilcd_wait_te(void)
+{
+    static bool first = true;
+    int64_t t0 = esp_timer_get_time();
+    if (first) {
+        ESP_LOGI(TAG, "TE pin initial level=%d (1=V-blank 0=scan)", gpio_get_level(LCD_TE));
+        first = false;
+    }
+    /* TE=1 = V-blank (可写入), TE=0 = 扫描中.
+     * 等 TE 拉高 → V-blank 期间抢先写顶部, 扫描线在后面追.
+     * 先等 TE=0 (确保不在 blank 内), 再等 TE=1 (blank 开始). */
+    while (gpio_get_level(LCD_TE) == 1) {
+        if (esp_timer_get_time() - t0 > 50000) return;
+    }
+    while (gpio_get_level(LCD_TE) == 0) {
+        if (esp_timer_get_time() - t0 > 50000) return;
     }
 }

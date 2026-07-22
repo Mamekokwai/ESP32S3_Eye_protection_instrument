@@ -5,7 +5,7 @@
 
 
 /* 引脚定义 */
-#define LED0_GPIO_PIN    GPIO_NUM_1     /* LED0连接的GPIO端口 */
+#define LED0_GPIO_PIN    GPIO_NUM_2     /* LED0 GPIO (避开 IO1=LCD_TE) */
 
 /* LED0端口定义 */
 #define LED0(x)          do { x ?                                \

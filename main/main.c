@@ -21,8 +21,89 @@
 #include "flash_player.h"
 #include "audio_player.h"
 #include "app_uart.h"
+#include "esp_cache.h"
 
 #define TAG "app"
+
+/* ====== PSRAM vs Internal DMA 显示诊断 ====== */
+#define DIAG_STRIP_H 40
+#define DIAG_FRAMES 60
+
+typedef enum
+{
+    BUF_INTERNAL_DMA,
+    BUF_PSRAM,
+    BUF_PSRAM_CACHED
+} buf_type_t;
+
+/* 用指定内存类型填充全屏纯色并发送, 测帧率和显示 */
+static void __attribute__((unused)) diag_fill_test(const char *label, buf_type_t btype, uint16_t color, int fps_target)
+{
+    int w = 320, h = 320;
+    size_t buf_sz = w * DIAG_STRIP_H * sizeof(uint16_t);
+    uint16_t *buf;
+
+    if (btype == BUF_INTERNAL_DMA)
+    {
+        buf = heap_caps_malloc(buf_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    }
+    else
+    {
+        buf = heap_caps_aligned_alloc(64, buf_sz, MALLOC_CAP_SPIRAM);
+    }
+    if (!buf)
+    {
+        ESP_LOGE(TAG, "%s: alloc fail", label);
+        return;
+    }
+
+    /* 填充颜色 */
+    for (int i = 0; i < w * DIAG_STRIP_H; i++)
+        buf[i] = color;
+
+    int64_t t0 = esp_timer_get_time();
+    for (int f = 0; f < DIAG_FRAMES; f++)
+    {
+        /* 每帧变色调, 确认帧在刷新 */
+        {
+            uint16_t c = color;
+            if (f % 3 == 1)
+                c = 0x07E0; /* GREEN */
+            if (f % 3 == 2)
+                c = 0x001F; /* BLUE */
+            for (int i = 0; i < w * DIAG_STRIP_H; i++)
+                buf[i] = c;
+        }
+
+        /* cache sync once (buffer 不变, 每帧只需一次) */
+        if (btype == BUF_PSRAM_CACHED)
+            esp_cache_msync(buf, buf_sz, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+        for (int ys = 0; ys < h; ys += DIAG_STRIP_H)
+        {
+            int row_h = (ys + DIAG_STRIP_H > h) ? h - ys : DIAG_STRIP_H;
+            refresh_done_flag = 0;
+            esp_lcd_panel_draw_bitmap(panel_handle, 0, ys, w, ys + row_h, buf);
+            while (!refresh_done_flag)
+                vTaskDelay(1);
+        }
+
+        /* 帧率控制 */
+        if (fps_target > 0)
+        {
+            int64_t target = t0 + (f + 1) * 1000000LL / fps_target;
+            while (esp_timer_get_time() < target)
+                vTaskDelay(1);
+        }
+    }
+    int64_t elapsed = esp_timer_get_time() - t0;
+    float fps = DIAG_FRAMES * 1e6f / elapsed;
+    ESP_LOGI(TAG, "%s: %.1f fps, %lld ms, mem=%s",
+             label, fps, elapsed / 1000,
+             btype == BUF_INTERNAL_DMA ? "internal" : "psram");
+
+    heap_caps_free(buf);
+}
 
 /* ====== 1ms Tick ====== */
 static volatile bool g_tick_flag = false;
@@ -140,7 +221,7 @@ static void monitor_tick(void)
 {
     g_mon++;
     if (g_mon % 50 == 0) /* 250ms */
-        gpio_set_level(GPIO_NUM_1, (g_mon / 50) % 2);
+        gpio_set_level(GPIO_NUM_2, (g_mon / 50) % 2);
     if (g_mon % 400 == 0) /* 2s   */
         ESP_LOGI(TAG, "heap=%lu mode=%d", esp_get_free_heap_size(), g_mode);
 }
@@ -161,33 +242,40 @@ void app_main(void)
     /* 显示测试图片 */
     {
         extern const uint8_t testimage_data[];
-        #define IMG_STRIP_H 20
+#define IMG_STRIP_H 20
         uint16_t *buf = heap_caps_malloc(320 * IMG_STRIP_H * sizeof(uint16_t), MALLOC_CAP_DMA);
-        if (!buf) {
+        if (!buf)
+        {
             ESP_LOGE(TAG, "DMA buf alloc failed");
-        } else {
-            for (int y = 0; y < 320; y += IMG_STRIP_H) {
+        }
+        else
+        {
+            for (int y = 0; y < 320; y += IMG_STRIP_H)
+            {
                 int h = (y + IMG_STRIP_H > 320) ? 320 - y : IMG_STRIP_H;
                 memcpy(buf, testimage_data + y * 320 * 2, 320 * h * 2);
                 refresh_done_flag = 0;
                 esp_lcd_panel_draw_bitmap(panel_handle, 0, y, 320, y + h, buf);
-                while (!refresh_done_flag) vTaskDelay(1);
+                while (!refresh_done_flag)
+                    vTaskDelay(1);
             }
             heap_caps_free(buf);
             ESP_LOGI(TAG, "image draw done");
         }
     }
 
-    // /* SD 初始化后 GPIO0 恢复上拉 */  /* DEBUG: GPIO0 检测暂时关闭 */
-    // gpio_reset_pin(GPIO_NUM_0);
-    // gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
-    // gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
-
     key_init();
-    gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
-    gpio_config(&lc);
+    // gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
+    // gpio_config(&lc);
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);  // LED 改用 IO2
 
     app_uart_init();
+
+    /* 上电自动播放 */
+    if (flash_player_init() == ESP_OK) {
+        g_mode = MODE_VIDEO_PLAYING;
+        ESP_LOGI(TAG, "Auto VPLAY OK");
+    }
 
     esp_timer_create_args_t ta = {.callback = tick_isr, .name = "tick"};
     esp_timer_handle_t tt;

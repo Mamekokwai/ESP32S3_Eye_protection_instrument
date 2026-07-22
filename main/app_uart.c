@@ -374,3 +374,12 @@ void app_uart_send(const char *msg)
 {
     uart_send_str(msg);
 }
+
+void app_uart_inject(const char *cmd)
+{
+    /* 注入指令到缓冲区, 下一个 tick 自动解析 */
+    size_t len = strlen(cmd);
+    if (len >= sizeof(g_line)) len = sizeof(g_line) - 1;
+    memcpy(g_line, cmd, len);
+    g_pos = len;
+}
