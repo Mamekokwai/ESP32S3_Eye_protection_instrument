@@ -64,7 +64,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ## 架构
 
-**存储分工**: Flash = AVI 视频, SD 卡 = PCM/MP3 音频 + JPEG 图片。
+**存储分工**: Flash = 内置 AVI 视频；SD 卡 = 可选择的 MJPEG AVI 视频 + PCM/MP3 音频 + JPEG 图片。
 **控制方式**: CA51F352P4 (主芯片) 通过共享 UART 总线发指令 → ESP32 (从机) 接收并执行。  
 背光由 CA51F352P4 自己控制, ESP32 不管。  
 **显示主循环**: CPU0 上 `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。
@@ -75,7 +75,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 main/
 ├── main.c              # 协作多任务主循环 + 状态机
 ├── app_uart.c/h        # UART 指令接收 + 解析 + 调试输出
-├── video_player.c/h    # SD卡 AVI 播放器 (tick化, 备份功能)
+├── video_player.c/h    # SD卡 MJPEG AVI 播放器 (序号/文件名选择、SRAM 条带 DMA)
 ├── raw_player.c/h      # SD卡 RAW 播放器 (tick化, 备份功能)
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 主力)
 ├── audio_player.c/h    # SD卡 PCM/MP3 音频播放器 (tick化)
@@ -83,7 +83,10 @@ main/
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf 全解析)
 ├── mjpeg.c/h           # JPEG 解码器 (默认 esp_new_jpeg SIMD 加速)
 ├── audio.c/h           # ES8311 音频驱动 (PCM 播放 + 流式写入)
-├── reset_to_dl.c/h     # 软复位到下载模式 (RTC GPIO hold IO0+IO46→esp_restart)
+├── sd_browser.c/h      # SD 卡目录浏览器 (SDLIST 命令, 分页显 TF 卡根目录)
+├── testimage_data.c    # 内嵌开机测试图片 (EMBED_FILES)
+├── mp3_decoder_wrapper.h # MP3 软解 wrapper 头文件 (helix MP3 decoder)
+├── reset_to_dl.c/h     # 软复位到下载模式 (RTC GPIO hold IO0→esp_restart)
 ├── beep.c/h            # PWM 蜂鸣器 (IO46冲突, 未编译, 仅保留)
 ├── canon.pcm           # 内嵌测试音频 (EMBED_FILES)
 ├── idf_component.yml   # IDF 组件管理器依赖
@@ -92,8 +95,10 @@ components/BSP/
 ├── SPILCD/             # LCD 8080 并口 (esp_lcd_panel_io_i80, JD9855 驱动)
 ├── SPI_SD/             # TF 卡 (SPI/SDMMC 宏切换)
 ├── MYSPI/              # SPI 总线 (仅 SD 卡)
-├── MYIIC/              # I2C (仅 ES8311)
-├── LED/                # GPIO LED (IO1, 心跳指示)
+├── MYIIC/              # I2C 总线封装 (myiic_init1 未调用, audio.c 自带 I2C 初始化)
+├── LED/                # GPIO LED (IO2, 心跳指示)
+├── KEY/                # 空目录, 旧板遗留 (无源文件)
+├── XL9555/             # 空目录, 旧板遗留 (无源文件)
 
 components/esp_lcd_jd9855/
 ├── esp_lcd_jd9855.c    # JD9855 驱动 (WA54TE057I-20Z, 320x320)
@@ -114,7 +119,8 @@ components/esp_lcd_jd9855/
 
 ```
 显示状态（视频和图片共用 LCD，互斥）:
-IDLE ──VPLAY──▶ VIDEO_PLAYING ──VPAUSE──▶ VIDEO_PAUSED
+IDLE ──VPLAY──▶ FLASH_VIDEO_PLAYING ──VPAUSE──▶ FLASH_VIDEO_PAUSED
+  ├──VID─────▶ SD_VIDEO_PLAYING ──────VPAUSE──▶ SD_VIDEO_PAUSED
   ├──IMG─────▶ IMAGE_LOADING ───────────▶ IDLE
   └──SLEEP───▶ SLEEP ──WAKE────────────▶ IDLE
 
@@ -146,6 +152,8 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | 指令 | 功能 | 响应示例 |
 |------|------|---------|
 | `VPLAY` | 播放 Flash 中 AVI 视频 | `OK VPLAY` |
+| `VIDLIST` | 列出 SD 卡根目录中的 MJPEG AVI | `VIDLIST` + 文件列表 |
+| `VID <N/fname>` | 播放第 N 个或指定 SD 卡 AVI | `OK VID name.avi` |
 | `VPAUSE` | 暂停视频 | `OK VPAUSE` |
 | `VRESUME` | 继续播放 | `OK VRESUME` |
 | `VSTOP` | 停止视频, 回空闲 | `OK VSTOP` |
@@ -166,8 +174,9 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 
 ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 `SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时只停止当前视频/图片显示，音频继续播放。
-`IMG` 仅支持 Baseline `.jpg/.jpeg`，文件不超过 1 MiB、解码尺寸不超过 320×320；小图居中，Progressive JPEG 需先转为 Baseline。读取按 16 KiB 分块进行，显示按 40 行 SRAM DMA 条带提交，UART 可继续处理状态查询。
-`VPLAY`、`IMG` 与 `APLAY` 的音频/显示状态相互独立；`SLEEP` 属于整机操作，会停止两者。
+`IMG` 仅支持 Baseline `.jpg/.jpeg`，文件不超过 1 MiB、解码尺寸不超过 320×320；小图居中，Progressive JPEG 需先转为 Baseline。
+`VID` 仅选择 TF 卡根目录中的 `.avi`，要求 MJPEG、最大 320×320，AVI 内音频块会跳过。压缩帧与解码帧放 PSRAM，显示前复制到内部 SRAM 条带，禁止 PSRAM 直接 DMA 到 LCD。
+`VPLAY`、`VID`、`IMG` 与 `APLAY` 的音频/显示状态相互独立；`SLEEP` 属于整机操作，会停止两者。
 
 ## 播放器类型
 
@@ -177,7 +186,7 @@ ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 |--------|--------|------|------|
 | `flash_player` | Flash storage | AVI (MJPEG) | **主力** 视频播放 |
 | `audio_player` | SD 卡 | PCM (16bit/mono/16kHz)、MP3 | **主力** 音频播放 |
-| `video_player` | SD 卡 | AVI (MJPEG，音频块跳过) | 备份 (不调用) |
+| `video_player` | SD 卡 | AVI (MJPEG，音频块跳过) | **主力** TF 视频播放 |
 | `raw_player` | SD 卡 | .raw (RGB565) | 备份 (不调用) |
 
 `main.c` 启动流程: 硬件 init → SD mount → 空闲画面 → 等 UART 指令。
@@ -228,19 +237,20 @@ GPIO0 运行时作为 TF 卡 CS，BOOT 按键初始化和扫描代码已移除�
 
 ## 注意事项
 
-- ES8311 输出为 16-bit 单声道；PCM 固定 16kHz，MP3 按源文件在 8–48kHz 间动态切换。重配时保持 codec enabled，避免 close/open 之间 suspend 导致寄存器配置失败
+- ES8311 输出为 16-bit 单声道；PCM 固定 16kHz，MP3 按源文件在 8–48kHz 间动态切换。音频初始化时调用 `esp_codec_set_disable_when_closed(codec_dev, false)` 是关键：采样率切换走 `esp_codec_dev_close/open` 重配 I2S，此标志阻止 close 时 `es8311_suspend()` 停时钟，否则 open 阶段 `codec->set_fs()` 写寄存器会因芯片停摆而 I2C 超时
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - 新板 SD 和 LCD 不共享 SPI 总线 → 无 SPI 竞争瓶颈
 - **LCD 驱动 IC 为 JD9855** (WA54TE057I-20Z, 320×320), 不是 NV3051G/ST7789
 - LCD 驱动在 `components/esp_lcd_jd9855/`, 初始化序列对齐原厂参考代码
 - `SPILCD/spilcd.c` 中 `LCD_DUAL` 宏控制单屏/双屏: `0`=仅 CS1 自动片选单屏测试, `1`=CS1+CS2 手动常低双屏；不要混用自动/手动 CS
 - 16px ASCII UI 按完整行一次性从内部 SRAM DMA 发送，其他字号按完整字形发送，避免短事务导致单屏文字乱码
-- 文字整行 DMA 使用固定、64 字节对齐的内部 SRAM 缓冲；当前 LCD i80 PCLK 保守设为 20 MHz，待 P1/P2 文字验证后再逐步提速
+- 文字整行 DMA 使用固定、64 字节对齐的内部 SRAM 缓冲；20 MHz 降频验证对 P1 乱码无效，LCD i80 PCLK 已恢复为 40 MHz
 - **背光由 CA51F352P4 控制** (PWM_LED → Q3 → LEDK), ESP32 不参与
 - ESP32 UART1 仅配置 RX (IO44), 不配置 TX (IO38 是 LCD D/C, 不能用作 UART TX)
 - 调试输出走 UART0 (IO43), `uart_send_str()` 在 `app_uart.c` 中
 - BSP 组件编译选项 `-ffast-math -O3`, 禁止 format warning
 - `beep.c/h` 仅保留文件, 未编译 — IO46 已改为 USB D+
-- `XL9555` 组件仍编译但代码中未调用 — 新板用 CA51F352P4 替代
+- `XL9555/` `KEY/` 目录已清空, 不再编译 — 新板用 CA51F352P4 替代
 - `.gitignore` 忽略 `近视/` `散光/` 目录 (大视频文件不入库)
 - `sample/` 为参考项目, `.gitignore` 忽略不入库
+- `MYIIC/myiic_init1()` 未调用, ES8311 的 I2C 总线由 `audio.c` 自行初始化, 独立于 MYIIC

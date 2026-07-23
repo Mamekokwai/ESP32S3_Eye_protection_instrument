@@ -18,6 +18,7 @@
 #include "spilcd.h"
 #include "spi_sd.h"
 #include "flash_player.h"
+#include "video_player.h"
 #include "audio_player.h"
 #include "image_viewer.h"
 #include "app_uart.h"
@@ -147,6 +148,16 @@ static void display_tick(void)
             g_display_mode = DISPLAY_IDLE;
         }
         break;
+    case DISPLAY_SD_VIDEO_PLAYING:
+        ret = video_player_tick();
+        if (ret == PLAYER_ERROR)
+        {
+            ESP_LOGE(TAG, "SD video player error");
+            video_player_stop();
+            app_uart_send("ERR VID playback");
+            g_display_mode = DISPLAY_IDLE;
+        }
+        break;
     case DISPLAY_IMAGE_LOADING:
     {
         image_viewer_state_t image_state = image_viewer_tick();
@@ -168,6 +179,7 @@ static void display_tick(void)
         break;
     }
     case DISPLAY_VIDEO_PAUSED:
+    case DISPLAY_SD_VIDEO_PAUSED:
     case DISPLAY_SLEEP:
     default:
         break;
@@ -262,7 +274,8 @@ void app_main(void)
 
         /* LCD 每条 40 行 DMA 约 5.1ms；视频每 1ms 检查一次可及时续传，
          * 音频仍保留在 5ms workspace 中，避免改变其阻塞写入节奏。 */
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_SD_VIDEO_PLAYING)
             display_tick();
         // 颜色测试
         //  if (++test1 >= 1000)
@@ -288,7 +301,8 @@ void app_main(void)
             state_tick();
             break;
         case WS_DISPLAY_TICK:
-            if (g_display_mode != DISPLAY_VIDEO_PLAYING)
+            if (g_display_mode != DISPLAY_VIDEO_PLAYING &&
+                g_display_mode != DISPLAY_SD_VIDEO_PLAYING)
                 display_tick();
             break;
         case WS_SYSTEM_MON:

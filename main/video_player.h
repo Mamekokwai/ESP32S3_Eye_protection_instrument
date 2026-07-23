@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_err.h"
 
 /* 播放器 tick 返回值 */
@@ -19,6 +21,23 @@ typedef enum {
  * @return ESP_OK 成功
  */
 esp_err_t video_player_init(const char *filename);
+
+/**
+ * @brief 列出 TF 卡根目录中的 AVI 文件
+ *
+ * 输出格式与 IMGLIST 一致：每行 "序号=文件名"。
+ */
+int video_player_list_files(char *output, size_t output_size);
+
+/**
+ * @brief 按序号或文件名启动 TF 卡 AVI
+ *
+ * @param selection "1" 或 "demo.avi"
+ */
+esp_err_t video_player_start(const char *selection);
+
+/** @brief 当前 TF 卡视频文件名 */
+const char *video_player_name(void);
 
 /**
  * @brief  推进播放器一帧 (非阻塞, 每 ~5ms 调用一次)

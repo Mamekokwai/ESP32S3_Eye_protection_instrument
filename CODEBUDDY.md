@@ -25,11 +25,11 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；当前 i80 PCLK 20MHz，优先保证 P1 文字稳定 |
+| Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；当前 i80 PCLK 40MHz |
 | 双屏同步 | ✅ | CS1(IO17)+CS2(IO18) 同画面 |
 | TE 帧同步 | ❌ 不可用 | JD9855 0x35 无法使能 TE, GPIO1 始终 LOW |
 | SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz、MP3, 待真机验证 |
-| UART 指令 | ✅ | VPLAY/VSTOP/VPAUSE/STATUS/INFO/... |
+| UART 指令 | ✅ | VPLAY/VIDLIST/VID/VSTOP/VPAUSE/STATUS/INFO/... |
 | 软复位烧录 | ✅ | DL 指令 → GPIO0 hold → esp_restart |
 
 ## 已解决的关键问题
@@ -65,7 +65,7 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 - 两个内部 SRAM DMA 条带缓冲交替使用，PSRAM 仍只保存完整帧
 - 首条发送 `RAMWR` 并设置整帧窗口，后续条带用 `RAMWRC` 连续写，避免每条重发 CASET/RASET 和同步等待
 - 16px ASCII UI 使用完整行 SRAM DMA，一行一次事务；其他字号至少保持完整字形一次事务，不要恢复为逐像素行短事务
-- 文字整行使用固定 64 字节对齐的内部 SRAM 缓冲，禁止将字体像素 DMA 缓冲放入 PSRAM；当前 PCLK=20MHz 是 P1 乱码定位版本
+- 文字整行使用固定 64 字节对齐的内部 SRAM 缓冲，禁止将字体像素 DMA 缓冲放入 PSRAM；20MHz 降频对 P1 乱码无效，已恢复 40MHz
 - 每 100 帧打印一次轻量 `perf` 日志，用于实机对比
 
 ## 文件结构
@@ -77,7 +77,7 @@ main/
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 非阻塞状态机)
 ├── audio_player.c/h    # SD 卡 PCM/MP3 音频 (tick化)
 ├── image_viewer.c/h    # SD 卡 JPEG 图片 (16KiB 分块读取 + SRAM DMA 条带显示)
-├── video_player.c/h    # SD 卡 AVI (备份, 未使用)
+├── video_player.c/h    # SD 卡 MJPEG AVI（序号/文件名选择、SRAM 条带 DMA）
 ├── raw_player.c/h      # SD 卡 RAW (备份, 未使用)
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf)
 ├── mjpeg.c/h           # JPEG 解码 (esp_new_jpeg SIMD, RGB565_LE)
@@ -140,6 +140,8 @@ tools/                   # 视频转换 + 烧录脚本
 | 指令 | 功能 |
 |------|------|
 | VPLAY / VSTOP / VPAUSE / VRESUME | 视频控制 |
+| VIDLIST | 列出 TF 卡根目录的 `.avi` 视频 |
+| VID N / VID fname.avi | 播放第 N 个或指定 TF 卡 MJPEG AVI |
 | APLAY N / APLAY fname | 音频播放 |
 | ALIST / ASTOP / AMUTE | 音频列表/停止/静音 |
 | SDLIST [page] | 屏幕分页显示 TF 卡根目录 |
@@ -151,7 +153,7 @@ tools/                   # 视频转换 + 烧录脚本
 | DL / RST | 烧录模式/重启 |
 
 `IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 40 行 DMA 条带。
-`VPLAY`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。
+`VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频帧缓冲位于 PSRAM，但 LCD 只接收内部 SRAM 的 40 行 DMA 条带。
 
 ## 开发经验文档
 

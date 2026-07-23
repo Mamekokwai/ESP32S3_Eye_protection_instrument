@@ -20,8 +20,8 @@
 #define IMAGE_MAX_FILE_SIZE   (1024U * 1024U)
 #define IMAGE_MAX_WIDTH       320U
 #define IMAGE_MAX_HEIGHT      320U
-#define IMAGE_READ_CHUNK      (16U * 1024U)
-#define IMAGE_STRIP_ROWS      40U
+#define IMAGE_READ_CHUNK      (32U * 1024U)
+#define IMAGE_STRIP_ROWS      80U
 #define IMAGE_FRAME_BYTES     (IMAGE_MAX_WIDTH * IMAGE_MAX_HEIGHT * sizeof(uint16_t))
 #define IMAGE_STRIP_BYTES     (IMAGE_MAX_WIDTH * IMAGE_STRIP_ROWS * sizeof(uint16_t))
 
@@ -415,7 +415,12 @@ image_viewer_state_t image_viewer_tick(void)
         s_image.offset_y = (IMAGE_MAX_HEIGHT - s_image.height) / 2;
         memset(s_image.strip, 0, IMAGE_STRIP_BYTES);
         s_image.row = 0;
-        s_image.phase = PHASE_CLEAR;
+        /* Full-screen images already cover every pixel; avoid a redundant
+         * clear pass that makes the old frame visibly disappear first. */
+        s_image.phase = (s_image.width == IMAGE_MAX_WIDTH &&
+                         s_image.height == IMAGE_MAX_HEIGHT)
+                            ? PHASE_SUBMIT
+                            : PHASE_CLEAR;
         break;
     }
 

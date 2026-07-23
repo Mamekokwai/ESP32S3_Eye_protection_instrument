@@ -6,7 +6,7 @@
  *
  * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
  *
- * 指令: VPLAY / VPAUSE / VRESUME / VSTOP
+ * 指令: VPLAY / VIDLIST / VID / VPAUSE / VRESUME / VSTOP
  *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST / IMGLIST / IMG
  *       DL / RST / STATUS / INFO / SLEEP / WAKE
  */
@@ -27,6 +27,7 @@
 #include "esp_system.h"
 #include "spilcd.h"
 #include "flash_player.h"
+#include "video_player.h"
 #include "audio_player.h"
 #include "sd_browser.h"
 #include "image_viewer.h"
@@ -52,6 +53,26 @@ static void uart_send_str(const char *msg)
     printf("%s\r\n", msg);
 }
 
+static bool is_flash_video_mode(void)
+{
+    return g_display_mode == DISPLAY_VIDEO_PLAYING ||
+           g_display_mode == DISPLAY_VIDEO_PAUSED;
+}
+
+static bool is_sd_video_mode(void)
+{
+    return g_display_mode == DISPLAY_SD_VIDEO_PLAYING ||
+           g_display_mode == DISPLAY_SD_VIDEO_PAUSED;
+}
+
+static void stop_display_video(void)
+{
+    if (is_flash_video_mode())
+        flash_player_stop();
+    else if (is_sd_video_mode())
+        video_player_stop();
+}
+
 static void cmd_handle(const char *cmd)
 {
     ESP_LOGI(TAG, "CMD: [%s]", cmd);
@@ -59,13 +80,14 @@ static void cmd_handle(const char *cmd)
     /* === 视频控制 === */
     if (strcasecmp(cmd, "VPLAY") == 0)
     {
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
-            g_display_mode == DISPLAY_VIDEO_PAUSED)
+        if (is_flash_video_mode())
         {
             uart_send_str("OK VPLAY (already)");
         }
         else
         {
+            if (is_sd_video_mode())
+                video_player_stop();
             if (g_display_mode == DISPLAY_IMAGE_LOADING)
                 image_viewer_cancel();
             g_display_mode = DISPLAY_IDLE;
@@ -90,6 +112,11 @@ static void cmd_handle(const char *cmd)
             spilcd_show_string(0, 0, 320, 16, 16, "Video paused", BLACK);
             uart_send_str("OK VPAUSE");
         }
+        else if (g_display_mode == DISPLAY_SD_VIDEO_PLAYING)
+        {
+            g_display_mode = DISPLAY_SD_VIDEO_PAUSED;
+            uart_send_str("OK VPAUSE");
+        }
         else
             uart_send_str("ERR not playing");
         return;
@@ -102,22 +129,82 @@ static void cmd_handle(const char *cmd)
             spilcd_show_string(0, 0, 320, 16, 16, "Video playing", BLACK);
             uart_send_str("OK VRESUME");
         }
+        else if (g_display_mode == DISPLAY_SD_VIDEO_PAUSED)
+        {
+            g_display_mode = DISPLAY_SD_VIDEO_PLAYING;
+            uart_send_str("OK VRESUME");
+        }
         else
             uart_send_str("ERR not paused");
         return;
     }
     if (strcasecmp(cmd, "VSTOP") == 0)
     {
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
-            g_display_mode == DISPLAY_VIDEO_PAUSED)
+        if (is_flash_video_mode() || is_sd_video_mode())
         {
-            flash_player_stop();
+            stop_display_video();
             g_display_mode = DISPLAY_IDLE;
             spilcd_show_string(0, 0, 320, 16, 16, "Idle", BLACK);
             uart_send_str("OK VSTOP");
         }
         else
             uart_send_str("ERR no video");
+        return;
+    }
+
+    /* === TF 卡 AVI 视频 === */
+    if (strcasecmp(cmd, "VIDLIST") == 0)
+    {
+        char list[512];
+        int count = video_player_list_files(list, sizeof(list));
+        if (count > 0)
+        {
+            uart_send_str("VIDLIST");
+            uart_send_str(list);
+        }
+        else if (count == 0)
+            uart_send_str("VIDLIST NONE");
+        else
+            uart_send_str("ERR no SD card (VIDLIST failed)");
+        return;
+    }
+    if (strcasecmp(cmd, "VID") == 0)
+    {
+        uart_send_str("ERR usage: VID <n> or VID <filename.avi>");
+        return;
+    }
+    if (strncasecmp(cmd, "VID ", 4) == 0)
+    {
+        const char *arg = cmd + 4;
+        while (*arg == ' ')
+            arg++;
+        if (!*arg)
+        {
+            uart_send_str("ERR usage: VID <n> or VID <filename.avi>");
+            return;
+        }
+
+        stop_display_video();
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
+            image_viewer_cancel();
+        g_display_mode = DISPLAY_IDLE;
+
+        esp_err_t ret = video_player_start(arg);
+        if (ret == ESP_OK)
+        {
+            g_display_mode = DISPLAY_SD_VIDEO_PLAYING;
+            char response[320];
+            snprintf(response, sizeof(response), "OK VID %s",
+                     video_player_name());
+            uart_send_str(response);
+        }
+        else
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "ERR VID %s",
+                     esp_err_to_name(ret));
+            uart_send_str(response);
+        }
         return;
     }
 
@@ -140,9 +227,7 @@ static void cmd_handle(const char *cmd)
             requested_page = (int)parsed_page;
         }
 
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
-            g_display_mode == DISPLAY_VIDEO_PAUSED)
-            flash_player_stop();
+        stop_display_video();
         if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
         g_display_mode = DISPLAY_IDLE;
@@ -199,9 +284,7 @@ static void cmd_handle(const char *cmd)
             uart_send_str("ERR usage: IMG <n> or IMG <filename.jpg>");
             return;
         }
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
-            g_display_mode == DISPLAY_VIDEO_PAUSED)
-            flash_player_stop();
+        stop_display_video();
         if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
         g_display_mode = DISPLAY_IDLE;
@@ -357,6 +440,10 @@ static void cmd_handle(const char *cmd)
             display = "video_playing";
         else if (g_display_mode == DISPLAY_VIDEO_PAUSED)
             display = "video_paused";
+        else if (g_display_mode == DISPLAY_SD_VIDEO_PLAYING)
+            display = "sd_video_playing";
+        else if (g_display_mode == DISPLAY_SD_VIDEO_PAUSED)
+            display = "sd_video_paused";
         else if (g_display_mode == DISPLAY_IMAGE_LOADING)
             display = "image_loading";
         else if (g_display_mode == DISPLAY_SLEEP)
@@ -381,9 +468,7 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "SLEEP") == 0)
     {
-        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
-            g_display_mode == DISPLAY_VIDEO_PAUSED)
-            flash_player_stop();
+        stop_display_video();
         if (audio_player_is_active())
             audio_player_stop();
         if (g_display_mode == DISPLAY_IMAGE_LOADING)
