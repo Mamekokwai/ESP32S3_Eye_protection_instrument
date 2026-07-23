@@ -30,7 +30,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | CS2 | IO18 | 右眼屏片选 |
 | TE | IO1 | Tearing Effect (两屏共享) |
 | RESET | IO3 | LCD 复位 (两屏共享) |
-| 同步方式 | CS1+CS2 同时拉低 | 写命令/数据, 两屏同画面 |
+| 同步方式 | CS1+CS2 手动常低 | i80 独占总线，写命令/数据时两屏严格同画面 |
 | **SD 卡 SPI** | | 独立总线, 不共享 |
 | CLK | IO21 | |
 | MOSI | IO47 | R21 10K 上拉 |
@@ -228,12 +228,14 @@ GPIO0 运行时作为 TF 卡 CS，BOOT 按键初始化和扫描代码已移除�
 
 ## 注意事项
 
-- ES8311 固定 16kHz 单声道, 音频格式不匹配会静音或变速
+- ES8311 输出为 16-bit 单声道；PCM 固定 16kHz，MP3 按源文件在 8–48kHz 间动态切换。重配时保持 codec enabled，避免 close/open 之间 suspend 导致寄存器配置失败
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - 新板 SD 和 LCD 不共享 SPI 总线 → 无 SPI 竞争瓶颈
 - **LCD 驱动 IC 为 JD9855** (WA54TE057I-20Z, 320×320), 不是 NV3051G/ST7789
 - LCD 驱动在 `components/esp_lcd_jd9855/`, 初始化序列对齐原厂参考代码
-- `SPILCD/spilcd.c` 中 `LCD_DUAL` 宏控制单屏/双屏: `0`=仅 CS1 单屏测试, `1`=CS1+CS2 双屏
+- `SPILCD/spilcd.c` 中 `LCD_DUAL` 宏控制单屏/双屏: `0`=仅 CS1 自动片选单屏测试, `1`=CS1+CS2 手动常低双屏；不要混用自动/手动 CS
+- 16px ASCII UI 按完整行一次性从内部 SRAM DMA 发送，其他字号按完整字形发送，避免短事务导致单屏文字乱码
+- 文字整行 DMA 使用固定、64 字节对齐的内部 SRAM 缓冲；当前 LCD i80 PCLK 保守设为 20 MHz，待 P1/P2 文字验证后再逐步提速
 - **背光由 CA51F352P4 控制** (PWM_LED → Q3 → LEDK), ESP32 不参与
 - ESP32 UART1 仅配置 RX (IO44), 不配置 TX (IO38 是 LCD D/C, 不能用作 UART TX)
 - 调试输出走 UART0 (IO43), `uart_send_str()` 在 `app_uart.c` 中

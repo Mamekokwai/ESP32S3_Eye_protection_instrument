@@ -25,7 +25,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；40MHz i80 理论上限约 24.4fps |
+| Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；当前 i80 PCLK 20MHz，优先保证 P1 文字稳定 |
 | 双屏同步 | ✅ | CS1(IO17)+CS2(IO18) 同画面 |
 | TE 帧同步 | ❌ 不可用 | JD9855 0x35 无法使能 TE, GPIO1 始终 LOW |
 | SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz、MP3, 待真机验证 |
@@ -64,6 +64,8 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 - 修复帧率等待期间重复消费解码信号、重复提交下一帧的问题
 - 两个内部 SRAM DMA 条带缓冲交替使用，PSRAM 仍只保存完整帧
 - 首条发送 `RAMWR` 并设置整帧窗口，后续条带用 `RAMWRC` 连续写，避免每条重发 CASET/RASET 和同步等待
+- 16px ASCII UI 使用完整行 SRAM DMA，一行一次事务；其他字号至少保持完整字形一次事务，不要恢复为逐像素行短事务
+- 文字整行使用固定 64 字节对齐的内部 SRAM 缓冲，禁止将字体像素 DMA 缓冲放入 PSRAM；当前 PCLK=20MHz 是 P1 乱码定位版本
 - 每 100 帧打印一次轻量 `perf` 日志，用于实机对比
 
 ## 文件结构
@@ -116,8 +118,8 @@ tools/                   # 视频转换 + 烧录脚本
 | LCD DB0-DB7 | IO6-IO13 | 8-bit 数据总线 (双屏共享) |
 | LCD WR | IO46 | |
 | LCD D/C | IO38 | |
-| LCD CS1 | IO17 | i80 驱动管理 |
-| LCD CS2 | IO18 | 手动 LOW (gpio_set_level) |
+| LCD CS1 | IO17 | 双屏模式手动 LOW |
+| LCD CS2 | IO18 | 双屏模式手动 LOW |
 | LCD TE | IO1 | INPUT+PULLUP, JD9855 未输出 |
 | LCD RST | IO3 | |
 | SD CLK | IO21 | |

@@ -192,7 +192,9 @@ void app_main(void)
 {
     /* 硬件初始化 */
     ESP_LOGI(TAG, "audio init");
-    audio_init();
+    esp_err_t audio_ret = audio_init();
+    if (audio_ret != ESP_OK)
+        ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue", esp_err_to_name(audio_ret));
     ESP_ERROR_CHECK(audio_player_start_service());
     ESP_LOGI(TAG, "SPI init");
     my_spi_init();

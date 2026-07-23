@@ -18,8 +18,9 @@
 #include "esp_heap_caps.h"
 #include "driver/gpio.h"
 
-#define LCD_CS2 GPIO_NUM_18 /* 右眼屏片选 (和 CS1=IO17 配合) */
-#define LCD_DUAL 1          /* 0=单屏测试, 1=双屏同画面 */
+#define LCD_CS2 GPIO_NUM_18                 /* 右眼屏片选 (和 CS1=IO17 配合) */
+#define LCD_DUAL 1                          /* 0=单屏测试, 1=双屏同画面 */
+#define LCD_TEXT_PCLK_HZ (40 * 1000 * 1000) // 屏幕通信频率
 
 #define TAG "spilcd"
 
@@ -27,6 +28,9 @@ volatile uint8_t refresh_done_flag = 0;
 volatile uint32_t refresh_done_count = 0;
 esp_lcd_panel_handle_t panel_handle = NULL;
 _spilcd_dev spilcddev;
+
+/* 文字专用的固定内部 SRAM DMA 缓冲，避免 PSRAM/堆分配参与 UI 传输。 */
+static uint16_t s_text16_dma_buf[320 * 16] __attribute__((aligned(64)));
 
 static bool notify_lcd_flush_ready(esp_lcd_panel_io_handle_t io,
                                    esp_lcd_panel_io_event_data_t *edata,
@@ -40,22 +44,34 @@ static bool notify_lcd_flush_ready(esp_lcd_panel_io_handle_t io,
 /* ---- 8080 并口 LCD 初始化 (双屏同画面, CS1+CS2) ---- */
 esp_err_t spilcd_init(void)
 {
-    /* 0. CS2 (右眼屏片选, CS1 由 i80 驱动管理) */
-    gpio_config_t cs2_cfg = {
+    /*
+     * 0. 双屏片选
+     *
+     * 双屏必须使用完全相同的 CS 时序。此前 CS1 由 i80 在每个事务间
+     * 自动切换，CS2 却常低；文字由大量极短事务组成，容易导致 CS1
+     * 对应的 P1 丢命令，而长视频事务不明显。
+     */
+    gpio_config_t cs_cfg = {
+#if LCD_DUAL
+        .pin_bit_mask = BIT64(LCD_CS) | BIT64(LCD_CS2),
+#else
         .pin_bit_mask = BIT64(LCD_CS2),
+#endif
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&cs2_cfg);
+    ESP_ERROR_CHECK(gpio_config(&cs_cfg));
 #if LCD_DUAL
-    gpio_set_level(LCD_CS2, 0); /* CS2 常低, 和 CS1 同步接收数据 */
-    // gpio_set_level(LCD_CS2, 1); /* CS2 常高, 不接受数据 */
-    ESP_LOGI(TAG, "Dual LCD: CS1=IO%d (i80), CS2=IO%d (manual LOW)", LCD_CS, LCD_CS2);
+    gpio_set_level(LCD_CS, 0);
+    gpio_set_level(LCD_CS2, 0);
+    ESP_LOGI(TAG, "Dual LCD: CS1=IO%d, CS2=IO%d (both manual LOW)",
+             LCD_CS, LCD_CS2);
 #else
     gpio_set_level(LCD_CS2, 1); /* CS2 高=禁用, 仅测 CS1 单屏 */
-    ESP_LOGI(TAG, "Single LCD: CS1=IO%d (i80), CS2=IO%d (disabled)", LCD_CS, LCD_CS2);
+    ESP_LOGI(TAG, "Single LCD: CS1=IO%d (i80), CS2=IO%d (disabled)",
+             LCD_CS, LCD_CS2);
 #endif
 
     /* TE 引脚配置 (IO1, LCD tearing effect 输入) */
@@ -92,8 +108,12 @@ esp_err_t spilcd_init(void)
 
     /* 2. 创建 panel IO */
     esp_lcd_panel_io_i80_config_t io_cfg = {
+#if LCD_DUAL
+        .cs_gpio_num = -1, /* 总线独占，CS1/CS2 已由 GPIO 同步常低 */
+#else
         .cs_gpio_num = LCD_CS,
-        .pclk_hz = 40 * 1000 * 1000, /* 40MHz 写时钟 <50MHZ */
+#endif
+        .pclk_hz = LCD_TEXT_PCLK_HZ,
         .trans_queue_depth = 2, /* 与双 SRAM 条带缓冲匹配 */
         .on_color_trans_done = notify_lcd_flush_ready,
         .dc_levels = {
@@ -276,7 +296,6 @@ void spilcd_draw_circle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color)
 
 void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t mode, uint16_t color)
 {
-    /* 逐行 buffer → draw_bitmap, 和 spilcd_fill 方式一致 */
     if (chr < 32 || chr > 126)
         chr = 32;
     uint8_t idx = chr - 32;
@@ -303,33 +322,57 @@ void spilcd_show_char(uint16_t x, uint16_t y, uint8_t chr, uint8_t size, uint8_t
         return;
     }
 
-    uint16_t bg = 0xFFFF; /* 白色背景 */
-    uint16_t *row_buf = heap_caps_malloc(ch_width * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    if (!row_buf)
+    if (x + ch_width > spilcddev.width || y + ch_height > spilcddev.height)
+        return;
+
+    /*
+     * 整个字符一次提交。
+     *
+     * 旧实现每行单独发送 CASET/RASET/RAMWR，一个 16px 字符需要
+     * 16 个极短 i80 事务。P1 对这种短窗口事务的时序裕量较小，会
+     * 偶发丢命令并表现为乱码；完整字符 DMA 也显著减少总线开销。
+     */
+    uint16_t bg = WHITE;
+    size_t pixel_count = (size_t)ch_width * ch_height;
+    uint16_t *char_buf = heap_caps_aligned_alloc(
+        64, pixel_count * sizeof(uint16_t),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!char_buf)
         return;
 
     for (int row = 0; row < ch_height; row++)
     {
         for (int col = 0; col < ch_width; col++)
         {
+            uint16_t pixel = bg;
             uint8_t byte_pos = row * byte_width + col / 8;
             if (size == 24 && (byte_pos % 2) && col % 8 >= 4)
             {
-                row_buf[col] = bg;
+                char_buf[row * ch_width + col] = pixel;
                 continue;
             }
             uint8_t bit_pos = 7 - (col % 8);
             if (font[byte_pos] & (1 << bit_pos))
-                row_buf[col] = color;
-            else if (mode == 0)
-                row_buf[col] = bg;
+                pixel = color;
+            else if (mode != 0)
+                pixel = bg; /* LCD 无读回能力，透明模式退化为白底 */
+            char_buf[row * ch_width + col] = pixel;
         }
-        refresh_done_flag = 0;
-        esp_lcd_panel_draw_bitmap(panel_handle, x, y + row, x + ch_width, y + row + 1, row_buf);
-        while (!refresh_done_flag)
-            vTaskDelay(1); /* 等每行传完 */
     }
-    heap_caps_free(row_buf);
+
+    refresh_done_flag = 0;
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(
+        panel_handle, x, y, x + ch_width, y + ch_height, char_buf);
+    if (ret == ESP_OK)
+    {
+        while (!refresh_done_flag)
+            vTaskDelay(1);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Character draw failed: %s", esp_err_to_name(ret));
+    }
+    heap_caps_free(char_buf);
 }
 
 static uint32_t lcd_pow(uint8_t m, uint8_t n)
@@ -363,6 +406,50 @@ void spilcd_show_num(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t 
 
 void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint8_t size, char *p, uint16_t color)
 {
+    if (!p || width == 0 || height == 0)
+        return;
+
+    /*
+     * 本项目所有 UI 字符串均为 16px ASCII。按整行生成连续 RGB565
+     * 缓冲并一次 DMA，避免逐字符重复发送窗口命令。
+     */
+    if (size == 16)
+    {
+        uint32_t end_x = (uint32_t)x + width;
+        uint32_t end_y = (uint32_t)y + height;
+        if (end_x > spilcddev.width)
+            end_x = spilcddev.width;
+        if (end_y > spilcddev.height)
+            end_y = spilcddev.height;
+
+        size_t chars_per_line = end_x > x ? (end_x - x) / 8 : 0;
+        if (chars_per_line > 40)
+            chars_per_line = 40;
+        if (chars_per_line == 0)
+            return;
+
+        char line[41];
+        while (*p >= ' ' && *p <= '~' && y + 16 <= end_y)
+        {
+            size_t count = 0;
+            while (count < chars_per_line &&
+                   p[count] >= ' ' && p[count] <= '~')
+            {
+                line[count] = p[count];
+                count++;
+            }
+            line[count] = '\0';
+            if (count == 0)
+                break;
+
+            if (spilcd_show_text16(x, y, line, color, WHITE) != ESP_OK)
+                break;
+            p += count;
+            y += 16;
+        }
+        return;
+    }
+
     uint8_t x0 = x;
     width += x;
     height += y;
@@ -393,11 +480,8 @@ esp_err_t spilcd_show_text16(uint16_t x, uint16_t y, const char *text,
         return ESP_OK;
 
     size_t width = char_count * 8;
-    size_t pixel_count = width * 16;
-    uint16_t *buffer = heap_caps_malloc(pixel_count * sizeof(uint16_t),
-                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    if (!buffer)
-        return ESP_ERR_NO_MEM;
+    /* max_chars 不超过 40，因此固定缓冲始终足够。 */
+    uint16_t *buffer = s_text16_dma_buf;
 
     for (size_t row = 0; row < 16; row++)
     {
@@ -417,13 +501,12 @@ esp_err_t spilcd_show_text16(uint16_t x, uint16_t y, const char *text,
 
     refresh_done_flag = 0;
     esp_err_t ret = esp_lcd_panel_draw_bitmap(panel_handle, x, y,
-                                               x + width, y + 16, buffer);
+                                              x + width, y + 16, buffer);
     if (ret == ESP_OK)
     {
         while (!refresh_done_flag)
             vTaskDelay(1);
     }
-    heap_caps_free(buffer);
     return ret;
 }
 
@@ -460,11 +543,15 @@ void spilcd_wait_te(void)
     /* TE=1 = V-blank (可写入), TE=0 = 扫描中.
      * 等 TE 拉高 → V-blank 期间抢先写顶部, 扫描线在后面追.
      * 先等 TE=0 (确保不在 blank 内), 再等 TE=1 (blank 开始). */
-    while (gpio_get_level(LCD_TE) == 1) {
-        if (esp_timer_get_time() - t0 > 50000) return;
+    while (gpio_get_level(LCD_TE) == 1)
+    {
+        if (esp_timer_get_time() - t0 > 50000)
+            return;
     }
-    while (gpio_get_level(LCD_TE) == 0) {
-        if (esp_timer_get_time() - t0 > 50000) return;
+    while (gpio_get_level(LCD_TE) == 0)
+    {
+        if (esp_timer_get_time() - t0 > 50000)
+            return;
     }
 #endif
 }

@@ -11,7 +11,7 @@
 #include "spilcd.h"
 
 #define SD_BROWSER_ROWS_PER_PAGE 12
-#define SD_BROWSER_LINE_CHARS    30
+#define SD_BROWSER_LINE_CHARS    35
 
 static const char *TAG = "sd_browser";
 

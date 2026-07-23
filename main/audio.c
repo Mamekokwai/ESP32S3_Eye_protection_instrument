@@ -38,6 +38,8 @@ static i2s_chan_handle_t tx_handle = NULL;
 static i2s_chan_handle_t rx_handle = NULL;
 static int current_sample_rate = SAMPLE_RATE;
 static int current_volume = 70;
+/* codec_dev 对象创建成功不代表 ES8311 已经应答并打开。 */
+static bool s_audio_ready = false;
 
 // ---- 内部函数 ----
 
@@ -200,6 +202,16 @@ static esp_err_t init_es8311_codec(void)
         return ESP_FAIL;
     }
 
+    /*
+     * Sample-rate changes use esp_codec_dev_close/open to reconfigure I2S.
+     * Keep ES8311 awake across close so open can program the new clock
+     * registers before codec->enable(true) is called.
+     */
+    if (esp_codec_set_disable_when_closed(codec_dev, false) != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Failed to keep ES8311 enabled across format changes");
+        return ESP_FAIL;
+    }
+
     // 打开设备
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = 16,
@@ -224,12 +236,20 @@ static esp_err_t init_es8311_codec(void)
 
 esp_err_t audio_init(void)
 {
-    return init_es8311_codec();
+    s_audio_ready = false;
+    esp_err_t ret = init_es8311_codec();
+    if (ret == ESP_OK)
+        s_audio_ready = true;
+    else
+        ESP_LOGE(TAG, "Audio unavailable, continuing without audio: %s", esp_err_to_name(ret));
+    return ret;
 }
 
 esp_err_t audio_play(const uint8_t *data, size_t len)
 {
-    if (codec_dev == NULL || data == NULL || len == 0) {
+    if (!s_audio_ready || codec_dev == NULL)
+        return ESP_ERR_INVALID_STATE;
+    if (data == NULL || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -255,7 +275,7 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
 
 esp_err_t audio_set_sample_rate(int sample_rate)
 {
-    if (codec_dev == NULL) {
+    if (!s_audio_ready || codec_dev == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     if (sample_rate < 8000 || sample_rate > 48000) {
@@ -272,8 +292,12 @@ esp_err_t audio_set_sample_rate(int sample_rate)
         .sample_rate = (uint32_t)sample_rate,
         .mclk_multiple = 0,
     };
-    esp_codec_dev_close(codec_dev);
-    int ret = esp_codec_dev_open(codec_dev, &fs);
+    int ret = esp_codec_dev_close(codec_dev);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Cannot stop I2S for sample-rate change: %d", ret);
+        return ESP_FAIL;
+    }
+    ret = esp_codec_dev_open(codec_dev, &fs);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Cannot set sample rate to %d Hz: %d", sample_rate, ret);
         return ESP_FAIL;
@@ -287,7 +311,10 @@ esp_err_t audio_set_sample_rate(int sample_rate)
 esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
                           int sample_rate, int channels)
 {
-    if (codec_dev == NULL || samples == NULL || num_samples == 0) {
+    if (!s_audio_ready || codec_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (samples == NULL || num_samples == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     if (channels != 1 && channels != 2) {
@@ -318,7 +345,7 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
 
 esp_err_t audio_set_volume(int vol)
 {
-    if (codec_dev == NULL) {
+    if (!s_audio_ready || codec_dev == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     if (vol < 0) vol = 0;
