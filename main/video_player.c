@@ -17,7 +17,6 @@
 #include "video_player.h"
 #include "avi.h"
 #include "mjpeg.h"
-#include "audio.h"
 #include "spilcd.h"
 #include "spi_sd.h"
 #include <string.h>
@@ -29,7 +28,6 @@
 #include "freertos/semphr.h"
 
 /* ====== 用户配置 ====== */
-#define ENABLE_AUDIO 0
 #define PROF_EVERY   10
 /* ===================== */
 
@@ -170,8 +168,7 @@ static inline bool lcd_is_ready(void)
 
 /* ---- 从流中读取一个 AVI chunk ---- */
 static bool read_one_chunk(sr_t *sr, AVI_INFO *avi,
-                            uint8_t *jpeg_out, size_t *jpeg_sz_out,
-                            int *audio_cnt)
+                            uint8_t *jpeg_out, size_t *jpeg_sz_out)
 {
     while (1) {
         uint8_t fhdr[8];
@@ -189,18 +186,9 @@ static bool read_one_chunk(sr_t *sr, AVI_INFO *avi,
             if (sz & 1) sr_skip_pad(sr, 1);
             return true;
         } else if (memcmp(fhdr, avi->AudioFLAG, 4) == 0) {
-#if ENABLE_AUDIO
-            if (sr_ensure(sr, sz) == ESP_OK) {
-                if (avi->AudioType == 1)
-                    audio_write_pcm((const int16_t *)(sr->buf + sr->pos),
-                                    sz / 2, avi->SampleRate, avi->Channels);
-                sr_adv(sr, sz);
-            }
-#else
+            /* 视频播放器只处理 MJPEG 图像；AVI 内的音频块始终跳过。 */
             sr_skip_pad(sr, sz);
-#endif
             if (sz & 1) sr_skip_pad(sr, 1);
-            if (audio_cnt) (*audio_cnt)++;
         } else {
             sr_skip_pad(sr, sz);
             if (sz & 1) sr_skip_pad(sr, 1);
@@ -234,7 +222,7 @@ typedef struct {
     uint32_t   frame_count;
     int64_t    start_ts;
     int64_t    t_wait_dec, t_read, t_wait_lcd, t_rate_ctl;
-    int        audio_frames, video_chunks, loop_wraps;
+    int        video_chunks, loop_wraps;
 } vp_ctx_t;
 
 static vp_ctx_t g_vp = {0};
@@ -291,8 +279,8 @@ esp_err_t video_player_init(const char *filename)
     g_vp.sr.pos = g_vp.sr.valid = 0;
 
     /* 预读前两帧 */
-    if (!read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[0], &g_vp.jpeg_size[0], NULL) ||
-        !read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[1], &g_vp.jpeg_size[1], NULL)) {
+    if (!read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[0], &g_vp.jpeg_size[0]) ||
+        !read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[1], &g_vp.jpeg_size[1])) {
         ESP_LOGE(TAG, "prefetch fail"); ret = ESP_FAIL; goto fail;
     }
 
@@ -341,18 +329,16 @@ player_ret_t video_player_tick(void)
     }
 
     /* Step C: 预读下一帧 JPEG → jpeg_buf[cur] */
-    int aud = 0;
     g_vp.have_next = read_one_chunk(&g_vp.sr, &g_vp.avi,
                                      g_vp.jpeg_buf[g_vp.cur],
-                                     &g_vp.jpeg_size[g_vp.cur], &aud);
-    g_vp.audio_frames += aud;
+                                     &g_vp.jpeg_size[g_vp.cur]);
     if (!g_vp.have_next) {
         /* 无缝绕回 movi 头 */
         f_lseek(&g_vp.file, g_vp.movi_pos);
         g_vp.sr.pos = g_vp.sr.valid = 0;
         g_vp.have_next = read_one_chunk(&g_vp.sr, &g_vp.avi,
                                          g_vp.jpeg_buf[g_vp.cur],
-                                         &g_vp.jpeg_size[g_vp.cur], &aud);
+                                         &g_vp.jpeg_size[g_vp.cur]);
         g_vp.loop_wraps++;
     }
     if (g_vp.have_next) g_vp.video_chunks++;

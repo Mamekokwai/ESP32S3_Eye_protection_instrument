@@ -36,6 +36,8 @@ static const audio_codec_gpio_if_t *gpio_if = NULL;
 static const audio_codec_if_t *codec_if = NULL;
 static i2s_chan_handle_t tx_handle = NULL;
 static i2s_chan_handle_t rx_handle = NULL;
+static int current_sample_rate = SAMPLE_RATE;
+static int current_volume = 70;
 
 // ---- 内部函数 ----
 
@@ -251,30 +253,66 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
-void audio_write_pcm(const int16_t *samples, size_t num_samples, int sample_rate, int channels)
+esp_err_t audio_set_sample_rate(int sample_rate)
 {
-    if (codec_dev == NULL || samples == NULL || num_samples == 0) {
-        return;
+    if (codec_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sample_rate < 8000 || sample_rate > 48000) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (sample_rate == current_sample_rate) {
+        return ESP_OK;
     }
 
-    // 立体声转单声道简单处理：取左声道
-    // 单声道直接写入
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = 16,
+        .channel = 1,
+        .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+        .sample_rate = (uint32_t)sample_rate,
+        .mclk_multiple = 0,
+    };
+    esp_codec_dev_close(codec_dev);
+    int ret = esp_codec_dev_open(codec_dev, &fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Cannot set sample rate to %d Hz: %d", sample_rate, ret);
+        return ESP_FAIL;
+    }
+    current_sample_rate = sample_rate;
+    esp_codec_dev_set_out_vol(codec_dev, current_volume);
+    ESP_LOGI(TAG, "Audio output: %d Hz, 16-bit mono", sample_rate);
+    return ESP_OK;
+}
+
+esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
+                          int sample_rate, int channels)
+{
+    if (codec_dev == NULL || samples == NULL || num_samples == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channels != 1 && channels != 2) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t ret = audio_set_sample_rate(sample_rate);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     size_t bytes = num_samples * sizeof(int16_t);
-    if (channels >= 2) {
-        // 下混到单声道：(L+R)/2
-        static int16_t mono_buf[1152 * 2];  // max samples per MP3 frame
-        size_t mono_count = num_samples / 2;
-        if (mono_count > sizeof(mono_buf) / sizeof(mono_buf[0])) {
-            mono_count = sizeof(mono_buf) / sizeof(mono_buf[0]);
+    if (channels == 2) {
+        static int16_t mono_buf[1152];
+        if (num_samples > sizeof(mono_buf) / sizeof(mono_buf[0])) {
+            return ESP_ERR_INVALID_SIZE;
         }
-        for (size_t i = 0; i < mono_count; i++) {
+        for (size_t i = 0; i < num_samples; i++) {
             int32_t mix = (int32_t)samples[i * 2] + samples[i * 2 + 1];
             mono_buf[i] = (int16_t)(mix / 2);
         }
-        bytes = mono_count * sizeof(int16_t);
-        esp_codec_dev_write(codec_dev, mono_buf, (int)bytes);
+        return esp_codec_dev_write(codec_dev, mono_buf, (int)bytes) == ESP_CODEC_DEV_OK
+                   ? ESP_OK : ESP_FAIL;
     } else {
-        esp_codec_dev_write(codec_dev, (void *)samples, (int)bytes);
+        return esp_codec_dev_write(codec_dev, (void *)samples, (int)bytes) == ESP_CODEC_DEV_OK
+                   ? ESP_OK : ESP_FAIL;
     }
 }
 
@@ -285,6 +323,6 @@ esp_err_t audio_set_volume(int vol)
     }
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
-
+    current_volume = vol;
     return esp_codec_dev_set_out_vol(codec_dev, vol);
 }

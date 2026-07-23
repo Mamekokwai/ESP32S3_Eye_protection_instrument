@@ -1,4 +1,14 @@
 dependencies:
+  esphome/micro-mp3:
+    component_hash: 51106d6a6ef13d37b598aa06b4a4de39249319110f990950eb123203a9e2eb6d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.4.0
   espressif/es8311:
     component_hash: 46b3117250344bb03f143d5e2becf81cfb111679fbd7b95cefc2d302d36cc393
     dependencies:
@@ -53,11 +63,12 @@ dependencies:
       type: idf
     version: 5.4.4
 direct_dependencies:
+- esphome/micro-mp3
 - espressif/es8311
 - espressif/esp_codec_dev
 - espressif/esp_jpeg
 - espressif/esp_new_jpeg
 - idf
-manifest_hash: edb2eb34a9720f9999fc4e2039b4378bbe9f3a6eb602f7432b3165e2d99b7a62
+manifest_hash: b05c63b760ee1c8abdbf54082c913af0bf64e50b32a2c39bcbd84afa7a9b05d0
 target: esp32s3
 version: 2.0.0

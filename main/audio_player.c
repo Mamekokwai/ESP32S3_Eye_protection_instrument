@@ -1,20 +1,28 @@
 /**
- * @brief  SD 卡 PCM 音频播放器 (tick 化, 非阻塞)
+ * @brief  SD 卡 PCM/MP3 音频播放器 (tick 化)
  *
- * 每次 tick 从 SD 卡读取一块 PCM 数据写入 I2S codec。
- * 格式: 16-bit signed, mono, 默认 16kHz (同 ES8311 配置)。
+ * PCM 直接分块输出；MP3 流式解码为 16-bit PCM 后输出到 ES8311。
  */
 #include "audio_player.h"
 #include "audio.h"
+#include "mp3_decoder_wrapper.h"
 #include "spi_sd.h"
 #include "ff.h"
 #include <string.h>
 #include <dirent.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 #define TAG "audio_player"
 #define CHUNK_SIZE  2048  /* 每次 tick 读取的字节数 */
+#define MP3_INPUT_SIZE 4096
+#define MP3_PCM_BYTES  4608
+
+typedef enum {
+    AUDIO_FMT_PCM,
+    AUDIO_FMT_MP3,
+} audio_format_t;
 
 typedef struct {
     bool initialized;
@@ -29,17 +37,34 @@ typedef struct {
     uint32_t chunks_done;
     int64_t  start_time;
     bool     loop;       /* 循环播放 */
+    audio_format_t format;
+    mp3_decoder_wrapper_t *decoder;
+    uint8_t *mp3_input;
+    int16_t *mp3_pcm;
+    size_t input_pos;
+    size_t input_len;
 } ap_ctx_t;
 
 static ap_ctx_t g_ap = { .volume = 70, .loop = true };
+
+static bool has_audio_extension(const char *name)
+{
+    size_t len = strlen(name);
+    return len > 4 &&
+           (strcasecmp(name + len - 4, ".pcm") == 0 ||
+            strcasecmp(name + len - 4, ".mp3") == 0);
+}
 
 /* ====== 公开 API ====== */
 
 esp_err_t audio_player_init(const char *filename)
 {
+    int volume = g_ap.volume ? g_ap.volume : 70;
+    bool muted = g_ap.muted;
     if (g_ap.initialized) audio_player_stop();
     memset(&g_ap, 0, sizeof(g_ap));
-    g_ap.volume = 70;
+    g_ap.volume = volume;
+    g_ap.muted   = muted;
     g_ap.loop    = true;
 
     /* 构建 FatFS 路径 */
@@ -64,7 +89,27 @@ esp_err_t audio_player_init(const char *filename)
     g_ap.initialized = true;
     strncpy(g_ap.filename, filename, sizeof(g_ap.filename) - 1);
 
-    ESP_LOGI(TAG, "Init: %s (%lu bytes)", g_ap.filename, (unsigned long)g_ap.file_size);
+    size_t name_len = strlen(filename);
+    g_ap.format = (name_len > 4 &&
+                   strcasecmp(filename + name_len - 4, ".mp3") == 0)
+                      ? AUDIO_FMT_MP3 : AUDIO_FMT_PCM;
+    if (g_ap.format == AUDIO_FMT_MP3) {
+        g_ap.decoder = mp3_decoder_create();
+        g_ap.mp3_input = heap_caps_malloc(MP3_INPUT_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        g_ap.mp3_pcm = heap_caps_malloc(MP3_PCM_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!g_ap.decoder || !g_ap.mp3_input || !g_ap.mp3_pcm) {
+            ESP_LOGE(TAG, "MP3 buffer allocation failed");
+            audio_player_stop();
+            return ESP_ERR_NO_MEM;
+        }
+    } else if (audio_set_sample_rate(16000) != ESP_OK) {
+        audio_player_stop();
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Init %s: %s (%lu bytes)",
+             g_ap.format == AUDIO_FMT_MP3 ? "MP3" : "PCM",
+             g_ap.filename, (unsigned long)g_ap.file_size);
     return ESP_OK;
 }
 
@@ -73,7 +118,74 @@ player_ret_t audio_player_tick(void)
     if (!g_ap.initialized) return PLAYER_ERROR;
     if (g_ap.muted) return PLAYER_BUSY;
 
-    /* 检查是否播放完毕 */
+    if (g_ap.format == AUDIO_FMT_MP3) {
+        for (int attempt = 0; attempt < 12; attempt++) {
+            if (g_ap.input_pos >= g_ap.input_len) {
+                UINT br = 0;
+                FRESULT fr = f_read(&g_ap.file, g_ap.mp3_input, MP3_INPUT_SIZE, &br);
+                if (fr != FR_OK) {
+                    ESP_LOGE(TAG, "MP3 read error: %d", fr);
+                    return PLAYER_ERROR;
+                }
+                if (br == 0) {
+                    if (!g_ap.loop) {
+                        audio_player_stop();
+                        return PLAYER_OK;
+                    }
+                    f_lseek(&g_ap.file, 0);
+                    g_ap.pos = 0;
+                    g_ap.chunks_done = 0;
+                    mp3_decoder_reset(g_ap.decoder);
+                    ESP_LOGI(TAG, "MP3 loop restart");
+                    continue;
+                }
+                g_ap.input_pos = 0;
+                g_ap.input_len = br;
+                g_ap.pos += br;
+            }
+
+            size_t consumed = 0;
+            size_t samples = 0;
+            int result = mp3_decoder_decode(g_ap.decoder,
+                                            g_ap.mp3_input + g_ap.input_pos,
+                                            g_ap.input_len - g_ap.input_pos,
+                                            g_ap.mp3_pcm, MP3_PCM_BYTES,
+                                            &consumed, &samples);
+            g_ap.input_pos += consumed;
+
+            if (result == 2 || result == -5) {
+                uint32_t rate = mp3_decoder_sample_rate(g_ap.decoder);
+                uint8_t channels = mp3_decoder_channels(g_ap.decoder);
+                if (audio_set_sample_rate((int)rate) != ESP_OK) {
+                    return PLAYER_ERROR;
+                }
+                ESP_LOGI(TAG, "MP3 stream: %lu Hz, %u ch, %lu kbps",
+                         (unsigned long)rate, channels,
+                         (unsigned long)mp3_decoder_bitrate(g_ap.decoder));
+                continue;
+            }
+            if (result == -4) {
+                ESP_LOGW(TAG, "Skipping damaged MP3 frame");
+                continue;
+            }
+            if (result < 0) {
+                ESP_LOGE(TAG, "MP3 decode failed: %d", result);
+                return PLAYER_ERROR;
+            }
+            if (samples > 0) {
+                if (audio_write_pcm(g_ap.mp3_pcm, samples,
+                                    (int)mp3_decoder_sample_rate(g_ap.decoder),
+                                    mp3_decoder_channels(g_ap.decoder)) != ESP_OK) {
+                    return PLAYER_ERROR;
+                }
+                g_ap.chunks_done++;
+                return PLAYER_OK;
+            }
+        }
+        return PLAYER_BUSY;
+    }
+
+    /* PCM: 检查是否播放完毕 */
     if (g_ap.pos >= g_ap.file_size) {
         if (g_ap.loop) {
             /* 循环: 回到开头 */
@@ -118,6 +230,12 @@ void audio_player_stop(void)
              g_ap.chunks_done, elapsed / 1000);
 
     if (g_ap.file.obj.fs) f_close(&g_ap.file);
+    mp3_decoder_destroy(g_ap.decoder);
+    free(g_ap.mp3_input);
+    free(g_ap.mp3_pcm);
+    g_ap.decoder = NULL;
+    g_ap.mp3_input = NULL;
+    g_ap.mp3_pcm = NULL;
     g_ap.initialized = false;
 }
 
@@ -160,9 +278,8 @@ int audio_player_list_files(char *out_buf, size_t out_len)
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         const char *name = entry->d_name;
-        size_t len = strlen(name);
-        /* 匹配 .pcm 文件 */
-        if (len > 4 && strcasecmp(name + len - 4, ".pcm") == 0) {
+        /* PCM 原始音频和 MP3 使用同一套播放命令 */
+        if (has_audio_extension(name)) {
             int n = snprintf(out_buf + pos, out_len - pos,
                              "%d=%s\n", count + 1, name);
             if (n > 0 && pos + n < out_len) {

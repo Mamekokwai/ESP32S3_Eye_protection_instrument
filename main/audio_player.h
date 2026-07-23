@@ -4,12 +4,12 @@
 #include "video_player.h"  /* player_ret_t */
 
 /**
- * @brief  SD 卡 PCM 音频播放器 (tick 化)
+ * @brief  SD 卡 PCM/MP3 音频播放器 (tick 化)
  *
- * 从 SD 卡读取 PCM 文件 (16-bit signed, mono, 16kHz),
- * 每次 tick 读取一块数据写入 I2S 输出。
+ * PCM 使用 16-bit signed/mono/16kHz；MP3 按源采样率流式解码，
+ * 立体声下混为单声道后写入 ES8311。
  *
- * 支持格式: 原始 PCM (无 header)
+ * 支持格式: 原始 PCM (无 header)、MP3 Layer III
  */
 
 /**
@@ -46,6 +46,6 @@ bool audio_player_toggle_mute(void);
 const char *audio_player_current_file(void);
 
 /**
- * @brief  列出 SD 卡根目录 PCM 文件, 返回文件数
+ * @brief  列出 SD 卡根目录 PCM/MP3 文件, 返回文件数
  */
 int audio_player_list_files(char *out_buf, size_t out_len);

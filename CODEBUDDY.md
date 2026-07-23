@@ -28,7 +28,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；40MHz i80 理论上限约 24.4fps |
 | 双屏同步 | ✅ | CS1(IO17)+CS2(IO18) 同画面 |
 | TE 帧同步 | ❌ 不可用 | JD9855 0x35 无法使能 TE, GPIO1 始终 LOW |
-| SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz, SD 卡未插入 |
+| SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz、MP3, 待真机验证 |
 | UART 指令 | ✅ | VPLAY/VSTOP/VPAUSE/STATUS/INFO/... |
 | 软复位烧录 | ✅ | DL 指令 → GPIO0 hold → esp_restart |
 
@@ -71,7 +71,8 @@ main/
 ├── main.c              # 主循环 + workspace 调度 + state machine
 ├── app_uart.c/h        # UART 指令接收/解析/响应
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 非阻塞状态机)
-├── audio_player.c/h    # SD 卡 PCM 音频 (tick化)
+├── audio_player.c/h    # SD 卡 PCM/MP3 音频 (tick化)
+├── image_viewer.c/h    # SD 卡 JPEG 图片 (16KiB 分块读取 + SRAM DMA 条带显示)
 ├── video_player.c/h    # SD 卡 AVI (备份, 未使用)
 ├── raw_player.c/h      # SD 卡 RAW (备份, 未使用)
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf)
@@ -138,10 +139,14 @@ tools/                   # 视频转换 + 烧录脚本
 | APLAY N / APLAY fname | 音频播放 |
 | ALIST / ASTOP / AMUTE | 音频列表/停止/静音 |
 | SDLIST [page] | 屏幕分页显示 TF 卡根目录 |
+| IMGLIST | 列出 TF 卡根目录的 JPEG 图片 |
+| IMG N / IMG fname.jpg | 异步读取并显示 Baseline JPEG |
 | VOL 0-100 | 音量 |
 | STATUS / INFO | 查询状态/系统信息 |
 | SLEEP / WAKE | 休眠/唤醒 |
 | DL / RST | 烧录模式/重启 |
+
+`IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 40 行 DMA 条带。
 
 ## 开发经验文档
 

@@ -64,7 +64,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ## 架构
 
-**存储分工**: Flash = AVI 视频, SD 卡 = PCM 音频。  
+**存储分工**: Flash = AVI 视频, SD 卡 = PCM/MP3 音频 + JPEG 图片。
 **控制方式**: CA51F352P4 (主芯片) 通过共享 UART 总线发指令 → ESP32 (从机) 接收并执行。  
 背光由 CA51F352P4 自己控制, ESP32 不管。  
 **主循环**: `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。  
@@ -77,7 +77,8 @@ main/
 ├── video_player.c/h    # SD卡 AVI 播放器 (tick化, 备份功能)
 ├── raw_player.c/h      # SD卡 RAW 播放器 (tick化, 备份功能)
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 主力)
-├── audio_player.c/h    # SD卡 PCM 音频播放器 (tick化)
+├── audio_player.c/h    # SD卡 PCM/MP3 音频播放器 (tick化)
+├── image_viewer.c/h    # SD卡 JPEG 图片查看器 (分块读取/分条 DMA 刷屏)
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf 全解析)
 ├── mjpeg.c/h           # JPEG 解码器 (默认 esp_new_jpeg SIMD 加速)
 ├── audio.c/h           # ES8311 音频驱动 (PCM 播放 + 流式写入)
@@ -118,6 +119,7 @@ IDLE ──VPLAY──▶ VIDEO_PLAYING ──VPAUSE──▶ VIDEO_PAUSED
   │◀──VSTOP────────┘◀──────VSTOP──────────────┘
   │
   ├──APLAY──▶ AUDIO_PLAYING ──ASTOP──▶ IDLE
+  ├──IMG──▶ IMAGE_LOADING ───────────▶ IDLE
   │
   └──SLEEP──▶ SLEEP ──WAKE──▶ IDLE
 ```
@@ -147,8 +149,10 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | `VPAUSE` | 暂停视频 | `OK VPAUSE` |
 | `VRESUME` | 继续播放 | `OK VRESUME` |
 | `VSTOP` | 停止视频, 回空闲 | `OK VSTOP` |
-| `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM 文件 | `OK APLAY` |
-| `ALIST` | 列出 SD 卡中 .pcm 文件 | `ALIST` + 文件列表 |
+| `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM/MP3 文件 | `OK APLAY` |
+| `ALIST` | 列出 SD 卡中 .pcm/.mp3 文件 | `ALIST` + 文件列表 |
+| `IMGLIST` | 列出 SD 卡根目录中的 JPEG 图片 | `IMGLIST` + 文件列表 |
+| `IMG <N/fname>` | 显示第 N 个或指定 JPEG 图片 | `OK IMG loading`，完成后 `OK IMG name 320x320` |
 | `SDLIST [page]` | 在屏幕分页显示 TF 卡根目录 | `OK SDLIST page=1/2 items=15` |
 | `ASTOP` | 停止音频 | `OK ASTOP` |
 | `AMUTE` | 静音切换 | `OK AMUTE on/off` |
@@ -162,6 +166,7 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 
 ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 `SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时会停止当前音视频播放。
+`IMG` 仅支持 Baseline `.jpg/.jpeg`，文件不超过 1 MiB、解码尺寸不超过 320×320；小图居中，Progressive JPEG 需先转为 Baseline。读取按 16 KiB 分块进行，显示按 40 行 SRAM DMA 条带提交，UART 可继续处理状态查询。
 
 ## 播放器类型
 
@@ -170,8 +175,8 @@ ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 | 播放器 | 数据源 | 格式 | 角色 |
 |--------|--------|------|------|
 | `flash_player` | Flash storage | AVI (MJPEG) | **主力** 视频播放 |
-| `audio_player` | SD 卡 | PCM (16bit/mono/16kHz) | **主力** 音频播放 |
-| `video_player` | SD 卡 | AVI (MJPEG+PCM) | 备份 (不调用) |
+| `audio_player` | SD 卡 | PCM (16bit/mono/16kHz)、MP3 | **主力** 音频播放 |
+| `video_player` | SD 卡 | AVI (MJPEG，音频块跳过) | 备份 (不调用) |
 | `raw_player` | SD 卡 | .raw (RGB565) | 备份 (不调用) |
 
 `main.c` 启动流程: 硬件 init → SD mount → 空闲画面 → 等 UART 指令。

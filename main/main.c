@@ -19,6 +19,7 @@
 #include "spi_sd.h"
 #include "flash_player.h"
 #include "audio_player.h"
+#include "image_viewer.h"
 #include "app_uart.h"
 #include "esp_cache.h"
 
@@ -132,6 +133,7 @@ typedef enum
     MODE_VIDEO_PLAYING,
     MODE_VIDEO_PAUSED,
     MODE_AUDIO_PLAYING,
+    MODE_IMAGE_LOADING,
     MODE_SLEEP,
 } app_mode_t;
 
@@ -164,6 +166,26 @@ static void player_tick(void)
             g_mode = MODE_IDLE;
         }
         break;
+    case MODE_IMAGE_LOADING:
+    {
+        image_viewer_state_t image_state = image_viewer_tick();
+        if (image_state == IMAGE_VIEWER_DONE)
+        {
+            char response[192];
+            snprintf(response, sizeof(response), "OK IMG %s %lux%lu", image_viewer_name(),
+                     (unsigned long)image_viewer_width(), (unsigned long)image_viewer_height());
+            app_uart_send(response);
+            g_mode = MODE_IDLE;
+        }
+        else if (image_state == IMAGE_VIEWER_ERROR)
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "ERR IMG %s", esp_err_to_name(image_viewer_last_error()));
+            app_uart_send(response);
+            g_mode = MODE_IDLE;
+        }
+        break;
+    }
     case MODE_VIDEO_PAUSED:
     case MODE_SLEEP:
     default:

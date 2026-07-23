@@ -7,7 +7,7 @@
  * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
  *
  * 指令: VPLAY / VPAUSE / VRESUME / VSTOP
- *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST
+ *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST / IMGLIST / IMG
  *       DL / RST / STATUS / INFO / SLEEP / WAKE
  */
 
@@ -29,6 +29,7 @@
 #include "flash_player.h"
 #include "audio_player.h"
 #include "sd_browser.h"
+#include "image_viewer.h"
 #include "reset_to_dl.h"
 
 #define TAG "uart"
@@ -50,6 +51,7 @@ typedef enum
     MODE_VIDEO_PLAYING,
     MODE_VIDEO_PAUSED,
     MODE_AUDIO_PLAYING,
+    MODE_IMAGE_LOADING,
     MODE_SLEEP,
 } app_mode_t;
 
@@ -78,6 +80,8 @@ static void cmd_handle(const char *cmd)
         {
             if (g_mode == MODE_AUDIO_PLAYING)
                 audio_player_stop();
+            if (g_mode == MODE_IMAGE_LOADING)
+                image_viewer_cancel();
             if (flash_player_init() == ESP_OK)
             {
                 g_mode = MODE_VIDEO_PLAYING;
@@ -152,6 +156,8 @@ static void cmd_handle(const char *cmd)
             flash_player_stop();
         if (g_mode == MODE_AUDIO_PLAYING)
             audio_player_stop();
+        if (g_mode == MODE_IMAGE_LOADING)
+            image_viewer_cancel();
         g_mode = MODE_IDLE;
 
         int shown_page = 1;
@@ -170,6 +176,59 @@ static void cmd_handle(const char *cmd)
         {
             char response[64];
             snprintf(response, sizeof(response), "ERR SDLIST %s", esp_err_to_name(ret));
+            uart_send_str(response);
+        }
+        return;
+    }
+
+    /* === TF 卡 JPEG 图片 === */
+    if (strcasecmp(cmd, "IMGLIST") == 0)
+    {
+        char list[512];
+        int count = image_viewer_list_files(list, sizeof(list));
+        if (count > 0)
+        {
+            uart_send_str("IMGLIST");
+            uart_send_str(list);
+        }
+        else if (count == 0)
+            uart_send_str("IMGLIST NONE");
+        else
+            uart_send_str("ERR no SD card (IMGLIST failed)");
+        return;
+    }
+    if (strcasecmp(cmd, "IMG") == 0)
+    {
+        uart_send_str("ERR usage: IMG <n> or IMG <filename.jpg>");
+        return;
+    }
+    if (strncasecmp(cmd, "IMG ", 4) == 0)
+    {
+        const char *arg = cmd + 4;
+        while (*arg == ' ')
+            arg++;
+        if (!*arg)
+        {
+            uart_send_str("ERR usage: IMG <n> or IMG <filename.jpg>");
+            return;
+        }
+        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+            flash_player_stop();
+        if (g_mode == MODE_AUDIO_PLAYING)
+            audio_player_stop();
+        if (g_mode == MODE_IMAGE_LOADING)
+            image_viewer_cancel();
+        esp_err_t ret = image_viewer_start(arg);
+        if (ret == ESP_OK)
+        {
+            g_mode = MODE_IMAGE_LOADING;
+            uart_send_str("OK IMG loading");
+        }
+        else
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "ERR IMG %s",
+                     esp_err_to_name(ret));
             uart_send_str(response);
         }
         return;
@@ -222,7 +281,9 @@ static void cmd_handle(const char *cmd)
             while ((e = readdir(dir)) != NULL)
             {
                 size_t l = strlen(e->d_name);
-                if (l > 4 && strcasecmp(e->d_name + l - 4, ".pcm") == 0)
+                if (l > 4 &&
+                    (strcasecmp(e->d_name + l - 4, ".pcm") == 0 ||
+                     strcasecmp(e->d_name + l - 4, ".mp3") == 0))
                 {
                     if (++cnt == idx)
                     {
@@ -245,6 +306,8 @@ static void cmd_handle(const char *cmd)
 
         if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
             flash_player_stop();
+        if (g_mode == MODE_IMAGE_LOADING)
+            image_viewer_cancel();
         if (audio_player_init(path) == ESP_OK)
         {
             g_mode = MODE_AUDIO_PLAYING;
@@ -315,6 +378,8 @@ static void cmd_handle(const char *cmd)
             s = "video paused";
         else if (g_mode == MODE_AUDIO_PLAYING)
             s = "audio playing";
+        else if (g_mode == MODE_IMAGE_LOADING)
+            s = "image loading";
         else if (g_mode == MODE_SLEEP)
             s = "sleep";
         const char *af = audio_player_current_file();
@@ -339,6 +404,8 @@ static void cmd_handle(const char *cmd)
             flash_player_stop();
         if (g_mode == MODE_AUDIO_PLAYING)
             audio_player_stop();
+        if (g_mode == MODE_IMAGE_LOADING)
+            image_viewer_cancel();
         g_mode = MODE_SLEEP;
         spilcd_clear(BLACK);
         spilcd_show_string(40, 140, 280, 170, 16, "Sleep", BLACK);

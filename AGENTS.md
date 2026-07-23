@@ -31,7 +31,7 @@ Use C with 4-space indentation and ESP-IDF conventions. Keep module APIs paired 
 
 ## Testing Guidelines
 
-No automated test suite is currently configured. Validate changes with `idf.py build`, then test on hardware through serial monitor commands such as `STATUS`, `VPLAY`, `VPAUSE`, `VSTOP`, `ALIST`, and `APLAY <file>`. For LCD changes, verify both panels, RGB565 color order, tearing behavior, and PSRAM/DMA effects.
+No automated test suite is currently configured. Validate changes with `idf.py build`, then test on hardware through serial monitor commands such as `STATUS`, `VPLAY`, `VPAUSE`, `VSTOP`, `ALIST`, `APLAY <file>`, `IMGLIST`, and `IMG <file.jpg>`. For LCD changes, verify both panels, RGB565 color order, tearing behavior, and PSRAM/DMA effects. JPEG input is limited to Baseline `.jpg/.jpeg`, 1 MiB, and 320×320.
 
 ## Commit & Pull Request Guidelines
 
