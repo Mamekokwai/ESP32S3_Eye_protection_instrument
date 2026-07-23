@@ -14,18 +14,21 @@ esp_err_t sd_spi_init(void)
 {
     ret = ESP_OK;
 
-    if (MY_SD_Handle != NULL) /* 再一次挂载或者初始化SD卡 */
+    if (mount_ret == ESP_OK && card != NULL)
     {
-        if (mount_ret == ESP_OK)
-        {
-            esp_vfs_fat_sdcard_unmount(mount_point, card); /* 取消挂载 */
-            mount_ret = ESP_FAIL;
-        }
+        esp_vfs_fat_sdcard_unmount(mount_point, card);
+        mount_ret = ESP_FAIL;
+        card = NULL;
     }
-    else if (MY_SD_Handle == NULL) /* 未初始化驱动 */
+
+#if SD_PROTOCOL == SD_PROTOCOL_SPI
+    ret = my_spi_init();
+    if (ret != ESP_OK)
     {
-        my_spi_init(); /* 初始化SPI总线(LCD需要) */
+        ESP_LOGE("spi_sd", "SPI2 init failed: %s", esp_err_to_name(ret));
+        return ret;
     }
+#endif
 
     /* 文件系统挂载配置 */
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
@@ -41,8 +44,7 @@ esp_err_t sd_spi_init(void)
      *  速度: 20MHz → 读写 ~1.6 MB/s (CMD18多块读)
      * ================================================================ */
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    // host.max_freq_khz = SDMMC_FREQ_DEFAULT;  /* 20MHz — 模块硬件上限 */
-    host.max_freq_khz = 40000; /* SPI 40 MHz 测试 */
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
     ESP_LOGI("spi_sd", "Protocol: SPI, target freq: %d kHz", (int)host.max_freq_khz);
 
     sdspi_device_config_t slot_config = {0};
@@ -59,12 +61,12 @@ esp_err_t sd_spi_init(void)
     /* ================================================================
      *  SDMMC 1-bit 模式
      *  引脚: CLK=21, CMD=47, D0=14 (和 SPI 共用, 不需改硬件)
-     *  速度: 40MHz → 读写 ~5 MB/s
-     *  注意: 初始化顺序必须先 SPI(LCD) 再 SDMMC, 否则引脚冲突
+     *  测试阶段先用 20MHz 验证通信，稳定后再测试 40MHz
+     *  LCD 使用 i80；本模式禁止初始化 SPI2
      * ================================================================ */
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED; /* 40MHz → 先试高速 */
-    host.flags = SDMMC_HOST_FLAG_1BIT;
+    host.max_freq_khz = SDMMC_1BIT_FREQ_KHZ;
+    host.flags = SDMMC_HOST_FLAG_1BIT | SDMMC_HOST_FLAG_DEINIT_ARG;
     ESP_LOGI("spi_sd", "Protocol: SDMMC 1-bit, target freq: %d kHz", (int)host.max_freq_khz);
 
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -77,6 +79,7 @@ esp_err_t sd_spi_init(void)
     slot_config.cd = SDMMC_SLOT_NO_CD;
     slot_config.wp = SDMMC_SLOT_NO_WP;
     slot_config.width = 1;
+    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     mount_ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 

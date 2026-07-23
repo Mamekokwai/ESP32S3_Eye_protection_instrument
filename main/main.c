@@ -209,8 +209,12 @@ void app_main(void)
     if (audio_ret != ESP_OK)
         ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue", esp_err_to_name(audio_ret));
     ESP_ERROR_CHECK(audio_player_start_service());
-    ESP_LOGI(TAG, "SPI init");
-    my_spi_init();
+#if SD_PROTOCOL == SD_PROTOCOL_SPI
+    ESP_LOGI(TAG, "TF SPI init");
+    ESP_ERROR_CHECK(my_spi_init());
+#else
+    ESP_LOGI(TAG, "TF SDMMC mode: SPI2 init skipped");
+#endif
     ESP_LOGI(TAG, "LCD init");
     spilcd_init();
     ESP_LOGI(TAG, "SD mount...");

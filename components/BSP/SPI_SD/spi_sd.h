@@ -13,17 +13,22 @@
 /* ============================================================
  *  TF 卡协议选择
  *
- *   SD_PROTOCOL_SPI        — SPI 模式 (当前, 20MHz, ~1.6MB/s)
- *   SD_PROTOCOL_SDMMC_1BIT — SDMMC 1-bit (40MHz, ~5MB/s, 不改硬件)
+ *   SD_PROTOCOL_SPI        — SPI 模式 (20MHz, ~1.6MB/s)
+ *   SD_PROTOCOL_SDMMC_1BIT — SDMMC 1-bit (当前测试模式)
  *
  *   SDMMC 1-bit 和 SPI 共用同一组引脚 (CLK=21, CMD/MOSI=47, D0/MISO=14)
- *   SPI 总线仍给 LCD 使用, SDMMC 独立访问 TF 卡, 两者不冲突
+ *   LCD 使用独立 i80 总线；SDMMC 模式下禁止初始化 SPI2
  * ============================================================ */
 #define SD_PROTOCOL_SPI 1
 #define SD_PROTOCOL_SDMMC_1BIT 2
 
 #ifndef SD_PROTOCOL
-#define SD_PROTOCOL SD_PROTOCOL_SPI
+#define SD_PROTOCOL SD_PROTOCOL_SDMMC_1BIT
+#endif
+
+/* SDMMC 1-bit 高速测试；20MHz 原接线验证已通过。 */
+#ifndef SDMMC_1BIT_FREQ_KHZ
+#define SDMMC_1BIT_FREQ_KHZ SDMMC_FREQ_HIGHSPEED
 #endif
 
 /* 引脚定义 */
