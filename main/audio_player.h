@@ -13,6 +13,11 @@
  */
 
 /**
+ * @brief  启动 CPU1 音频服务任务
+ */
+esp_err_t audio_player_start_service(void);
+
+/**
  * @brief  初始化音频播放器
  * @param  filename  VFS 路径, 如 "/0:/music.pcm"
  * @return ESP_OK 成功
@@ -28,6 +33,11 @@ player_ret_t audio_player_tick(void);
  * @brief  停止播放, 关闭文件
  */
 void audio_player_stop(void);
+
+/**
+ * @brief  查询音频播放器是否正在运行
+ */
+bool audio_player_is_active(void);
 
 /**
  * @brief  设置音量 0-100

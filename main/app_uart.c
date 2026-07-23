@@ -44,19 +44,6 @@
 static char g_line[128];
 static int g_pos = 0;
 
-/* ---- 应用状态 (extern, main.c 定义) ---- */
-typedef enum
-{
-    MODE_IDLE = 0,
-    MODE_VIDEO_PLAYING,
-    MODE_VIDEO_PAUSED,
-    MODE_AUDIO_PLAYING,
-    MODE_IMAGE_LOADING,
-    MODE_SLEEP,
-} app_mode_t;
-
-extern app_mode_t g_mode;
-
 /* ====== 内部 ====== */
 
 /* printf → UART0 TX=IO43 (CA51 和电脑都收得到) */
@@ -72,19 +59,19 @@ static void cmd_handle(const char *cmd)
     /* === 视频控制 === */
     if (strcasecmp(cmd, "VPLAY") == 0)
     {
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_VIDEO_PAUSED)
         {
             uart_send_str("OK VPLAY (already)");
         }
         else
         {
-            if (g_mode == MODE_AUDIO_PLAYING)
-                audio_player_stop();
-            if (g_mode == MODE_IMAGE_LOADING)
+            if (g_display_mode == DISPLAY_IMAGE_LOADING)
                 image_viewer_cancel();
+            g_display_mode = DISPLAY_IDLE;
             if (flash_player_init() == ESP_OK)
             {
-                g_mode = MODE_VIDEO_PLAYING;
+                g_display_mode = DISPLAY_VIDEO_PLAYING;
                 spilcd_show_string(0, 0, 320, 16, 16, "Video playing", BLACK);
                 uart_send_str("OK VPLAY");
             }
@@ -97,9 +84,9 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "VPAUSE") == 0)
     {
-        if (g_mode == MODE_VIDEO_PLAYING)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING)
         {
-            g_mode = MODE_VIDEO_PAUSED;
+            g_display_mode = DISPLAY_VIDEO_PAUSED;
             spilcd_show_string(0, 0, 320, 16, 16, "Video paused", BLACK);
             uart_send_str("OK VPAUSE");
         }
@@ -109,9 +96,9 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "VRESUME") == 0)
     {
-        if (g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PAUSED)
         {
-            g_mode = MODE_VIDEO_PLAYING;
+            g_display_mode = DISPLAY_VIDEO_PLAYING;
             spilcd_show_string(0, 0, 320, 16, 16, "Video playing", BLACK);
             uart_send_str("OK VRESUME");
         }
@@ -121,10 +108,11 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "VSTOP") == 0)
     {
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_VIDEO_PAUSED)
         {
             flash_player_stop();
-            g_mode = MODE_IDLE;
+            g_display_mode = DISPLAY_IDLE;
             spilcd_show_string(0, 0, 320, 16, 16, "Idle", BLACK);
             uart_send_str("OK VSTOP");
         }
@@ -152,13 +140,12 @@ static void cmd_handle(const char *cmd)
             requested_page = (int)parsed_page;
         }
 
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_VIDEO_PAUSED)
             flash_player_stop();
-        if (g_mode == MODE_AUDIO_PLAYING)
-            audio_player_stop();
-        if (g_mode == MODE_IMAGE_LOADING)
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
-        g_mode = MODE_IDLE;
+        g_display_mode = DISPLAY_IDLE;
 
         int shown_page = 1;
         int page_count = 1;
@@ -212,16 +199,16 @@ static void cmd_handle(const char *cmd)
             uart_send_str("ERR usage: IMG <n> or IMG <filename.jpg>");
             return;
         }
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_VIDEO_PAUSED)
             flash_player_stop();
-        if (g_mode == MODE_AUDIO_PLAYING)
-            audio_player_stop();
-        if (g_mode == MODE_IMAGE_LOADING)
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
+        g_display_mode = DISPLAY_IDLE;
         esp_err_t ret = image_viewer_start(arg);
         if (ret == ESP_OK)
         {
-            g_mode = MODE_IMAGE_LOADING;
+            g_display_mode = DISPLAY_IMAGE_LOADING;
             uart_send_str("OK IMG loading");
         }
         else
@@ -304,13 +291,8 @@ static void cmd_handle(const char *cmd)
             snprintf(path, sizeof(path), "0:%s", arg);
         }
 
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
-            flash_player_stop();
-        if (g_mode == MODE_IMAGE_LOADING)
-            image_viewer_cancel();
         if (audio_player_init(path) == ESP_OK)
         {
-            g_mode = MODE_AUDIO_PLAYING;
             uart_send_str("OK APLAY");
         }
         else
@@ -321,10 +303,9 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "ASTOP") == 0)
     {
-        if (g_mode == MODE_AUDIO_PLAYING)
+        if (audio_player_is_active())
         {
             audio_player_stop();
-            g_mode = MODE_IDLE;
             uart_send_str("OK ASTOP");
         }
         else
@@ -371,23 +352,23 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "STATUS") == 0)
     {
-        const char *s = "idle";
-        if (g_mode == MODE_VIDEO_PLAYING)
-            s = "video playing";
-        else if (g_mode == MODE_VIDEO_PAUSED)
-            s = "video paused";
-        else if (g_mode == MODE_AUDIO_PLAYING)
-            s = "audio playing";
-        else if (g_mode == MODE_IMAGE_LOADING)
-            s = "image loading";
-        else if (g_mode == MODE_SLEEP)
-            s = "sleep";
+        const char *display = "idle";
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING)
+            display = "video_playing";
+        else if (g_display_mode == DISPLAY_VIDEO_PAUSED)
+            display = "video_paused";
+        else if (g_display_mode == DISPLAY_IMAGE_LOADING)
+            display = "image_loading";
+        else if (g_display_mode == DISPLAY_SLEEP)
+            display = "sleep";
         const char *af = audio_player_current_file();
-        char r[128];
+        char r[384];
         if (af)
-            snprintf(r, sizeof(r), "STATUS %s audio=%s", s, af);
+            snprintf(r, sizeof(r), "STATUS display=%s audio=%s",
+                     display, af);
         else
-            snprintf(r, sizeof(r), "STATUS %s", s);
+            snprintf(r, sizeof(r), "STATUS display=%s audio=stopped",
+                     display);
         uart_send_str(r);
         return;
     }
@@ -400,13 +381,14 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "SLEEP") == 0)
     {
-        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
+            g_display_mode == DISPLAY_VIDEO_PAUSED)
             flash_player_stop();
-        if (g_mode == MODE_AUDIO_PLAYING)
+        if (audio_player_is_active())
             audio_player_stop();
-        if (g_mode == MODE_IMAGE_LOADING)
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
-        g_mode = MODE_SLEEP;
+        g_display_mode = DISPLAY_SLEEP;
         spilcd_clear(BLACK);
         spilcd_show_string(40, 140, 280, 170, 16, "Sleep", BLACK);
         uart_send_str("OK SLEEP");
@@ -414,9 +396,9 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "WAKE") == 0)
     {
-        if (g_mode == MODE_SLEEP)
+        if (g_display_mode == DISPLAY_SLEEP)
         {
-            g_mode = MODE_IDLE;
+            g_display_mode = DISPLAY_IDLE;
             spilcd_clear(BLACK);
             spilcd_show_string(40, 140, 280, 170, 16, "ESP32-S3 Eye", BLUE);
         }

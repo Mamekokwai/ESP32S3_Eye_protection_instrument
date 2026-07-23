@@ -120,53 +120,34 @@ typedef enum
 {
     WS_UART_CMD = 0,
     WS_APP_STATE = 1,
-    WS_PLAYER_TICK = 2,
+    WS_DISPLAY_TICK = 2,
     WS_SYSTEM_MON = 3,
     WS_RESERVED = 4,
     WS_NUM
 } workspace_t;
 
-/* ====== 应用状态 (app_uart.c 通过 extern 访问) ====== */
-typedef enum
-{
-    MODE_IDLE = 0,
-    MODE_VIDEO_PLAYING,
-    MODE_VIDEO_PAUSED,
-    MODE_AUDIO_PLAYING,
-    MODE_IMAGE_LOADING,
-    MODE_SLEEP,
-} app_mode_t;
-
-app_mode_t g_mode = MODE_IDLE;
+/* 显示状态与音频播放器状态相互独立。 */
+display_mode_t g_display_mode = DISPLAY_IDLE;
 
 /* ---- 状态机 (占位, 状态切换由 UART 指令驱动) ---- */
 static void state_tick(void) {}
 
-/* ---- 播放器调度 ---- */
-static void player_tick(void)
+/* ---- 显示调度：视频和图片共用 LCD，因此两者互斥 ---- */
+static void display_tick(void)
 {
     player_ret_t ret;
-    switch (g_mode)
+    switch (g_display_mode)
     {
-    case MODE_VIDEO_PLAYING:
+    case DISPLAY_VIDEO_PLAYING:
         ret = flash_player_tick();
         if (ret == PLAYER_ERROR)
         {
             ESP_LOGE(TAG, "Flash player error");
             flash_player_stop();
-            g_mode = MODE_IDLE;
+            g_display_mode = DISPLAY_IDLE;
         }
         break;
-    case MODE_AUDIO_PLAYING:
-        ret = audio_player_tick();
-        if (ret == PLAYER_ERROR)
-        {
-            ESP_LOGE(TAG, "Audio player error");
-            audio_player_stop();
-            g_mode = MODE_IDLE;
-        }
-        break;
-    case MODE_IMAGE_LOADING:
+    case DISPLAY_IMAGE_LOADING:
     {
         image_viewer_state_t image_state = image_viewer_tick();
         if (image_state == IMAGE_VIEWER_DONE)
@@ -175,19 +156,19 @@ static void player_tick(void)
             snprintf(response, sizeof(response), "OK IMG %s %lux%lu", image_viewer_name(),
                      (unsigned long)image_viewer_width(), (unsigned long)image_viewer_height());
             app_uart_send(response);
-            g_mode = MODE_IDLE;
+            g_display_mode = DISPLAY_IDLE;
         }
         else if (image_state == IMAGE_VIEWER_ERROR)
         {
             char response[64];
             snprintf(response, sizeof(response), "ERR IMG %s", esp_err_to_name(image_viewer_last_error()));
             app_uart_send(response);
-            g_mode = MODE_IDLE;
+            g_display_mode = DISPLAY_IDLE;
         }
         break;
     }
-    case MODE_VIDEO_PAUSED:
-    case MODE_SLEEP:
+    case DISPLAY_VIDEO_PAUSED:
+    case DISPLAY_SLEEP:
     default:
         break;
     }
@@ -201,7 +182,9 @@ static void monitor_tick(void)
     if (g_mon % 50 == 0) /* 250ms */
         gpio_set_level(GPIO_NUM_2, (g_mon / 50) % 2);
     if (g_mon % 400 == 0) /* 2s   */
-        ESP_LOGI(TAG, "heap=%lu mode=%d", esp_get_free_heap_size(), g_mode);
+        ESP_LOGI(TAG, "heap=%lu display=%d audio=%d",
+                 esp_get_free_heap_size(), g_display_mode,
+                 audio_player_is_active());
 }
 
 /* ====== 主入口 ====== */
@@ -210,6 +193,7 @@ void app_main(void)
     /* 硬件初始化 */
     ESP_LOGI(TAG, "audio init");
     audio_init();
+    ESP_ERROR_CHECK(audio_player_start_service());
     ESP_LOGI(TAG, "SPI init");
     my_spi_init();
     ESP_LOGI(TAG, "LCD init");
@@ -251,7 +235,7 @@ void app_main(void)
     /* 上电自动播放 */
     if (flash_player_init() == ESP_OK)
     {
-        g_mode = MODE_VIDEO_PLAYING;
+        g_display_mode = DISPLAY_VIDEO_PLAYING;
         ESP_LOGI(TAG, "Auto VPLAY OK");
     }
 
@@ -276,8 +260,8 @@ void app_main(void)
 
         /* LCD 每条 40 行 DMA 约 5.1ms；视频每 1ms 检查一次可及时续传，
          * 音频仍保留在 5ms workspace 中，避免改变其阻塞写入节奏。 */
-        if (g_mode == MODE_VIDEO_PLAYING)
-            player_tick();
+        if (g_display_mode == DISPLAY_VIDEO_PLAYING)
+            display_tick();
         // 颜色测试
         //  if (++test1 >= 1000)
         //  {
@@ -301,9 +285,9 @@ void app_main(void)
         case WS_APP_STATE:
             state_tick();
             break;
-        case WS_PLAYER_TICK:
-            if (g_mode != MODE_VIDEO_PLAYING)
-                player_tick();
+        case WS_DISPLAY_TICK:
+            if (g_display_mode != DISPLAY_VIDEO_PLAYING)
+                display_tick();
             break;
         case WS_SYSTEM_MON:
             monitor_tick();

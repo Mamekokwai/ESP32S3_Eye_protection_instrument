@@ -3,16 +3,14 @@ set(src_dirs
             MYSPI
             SPI_SD
             SPILCD
-            MYIIC
-            XL9555)
+            MYIIC)
 
 set(include_dirs
             LED
             MYSPI
             SPI_SD
             SPILCD
-            MYIIC
-            XL9555)
+            MYIIC)
 
 set(requires
             driver

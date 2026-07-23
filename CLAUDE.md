@@ -67,7 +67,8 @@ idf.py -p /dev/ttyUSB0 flash monitor
 **存储分工**: Flash = AVI 视频, SD 卡 = PCM/MP3 音频 + JPEG 图片。
 **控制方式**: CA51F352P4 (主芯片) 通过共享 UART 总线发指令 → ESP32 (从机) 接收并执行。  
 背光由 CA51F352P4 自己控制, ESP32 不管。  
-**主循环**: `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。  
+**显示主循环**: CPU0 上 `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。
+**音频任务**: CPU1 独立 FreeRTOS 任务, 5ms tick；I2S 阻塞写入不会卡住视频/LCD 调度。
 **FreeRTOS**: `CONFIG_FREERTOS_HZ=1000` (1 tick = 1ms, 在 `sdkconfig.defaults` 中配置)。
 
 ```
@@ -92,9 +93,7 @@ components/BSP/
 ├── SPI_SD/             # TF 卡 (SPI/SDMMC 宏切换)
 ├── MYSPI/              # SPI 总线 (仅 SD 卡)
 ├── MYIIC/              # I2C (仅 ES8311)
-├── KEY/                # 旧 BOOT 按键代码，已停止编译，IO0 留给 SD CS
 ├── LED/                # GPIO LED (IO1, 心跳指示)
-├── XL9555/             # I2C GPIO扩展 (旧板遗留, 仅编译未使用)
 
 components/esp_lcd_jd9855/
 ├── esp_lcd_jd9855.c    # JD9855 驱动 (WA54TE057I-20Z, 320x320)
@@ -107,22 +106,23 @@ components/esp_lcd_jd9855/
 |------|------|------|
 | 0 | UART 指令接收 + 解析 | 5ms |
 | 1 | 应用状态机 | 5ms |
-| 2 | 音频播放器 tick；视频另走 1ms 快速服务 | 音频5ms / 视频1ms |
+| 2 | 图片加载 tick；视频另走 1ms 快速服务 | 图片5ms / 视频1ms |
 | 3 | 系统监控 (LED心跳/堆日志) | 5ms |
 | 4 | 保留空闲槽位 | 5ms |
 
 ### 应用状态机
 
 ```
+显示状态（视频和图片共用 LCD，互斥）:
 IDLE ──VPLAY──▶ VIDEO_PLAYING ──VPAUSE──▶ VIDEO_PAUSED
-  │                 │                          │
-  │◀──VSTOP────────┘◀──────VSTOP──────────────┘
-  │
-  ├──APLAY──▶ AUDIO_PLAYING ──ASTOP──▶ IDLE
-  ├──IMG──▶ IMAGE_LOADING ───────────▶ IDLE
-  │
-  └──SLEEP──▶ SLEEP ──WAKE──▶ IDLE
+  ├──IMG─────▶ IMAGE_LOADING ───────────▶ IDLE
+  └──SLEEP───▶ SLEEP ──WAKE────────────▶ IDLE
+
+音频状态（与显示状态独立）:
+STOPPED ──APLAY──▶ PLAYING ──ASTOP──▶ STOPPED
 ```
+
+音频固定由 CPU1 服务任务运行，不与视频做时间轴同步；`APLAY` 可与视频播放或图片加载同时运行。音频控制 API 使用递归互斥锁，避免 UART 控制与播放 tick 竞争。
 
 ## UART 通信架构
 
@@ -159,14 +159,15 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | `VOL <0-100>` | 设置音量 | `OK VOL 80` |
 | `DL` | 软复位进入烧录模式 | `OK DL` |
 | `RST` | 系统重启 | `OK RST` |
-| `STATUS` | 查询播放状态 | `STATUS idle` |
+| `STATUS` | 分别查询显示和音频状态 | `STATUS display=video_playing audio=0:music.mp3` |
 | `INFO` | 查询系统信息 | `INFO heap=xxx` |
 | `SLEEP` | 关屏休眠 | `OK SLEEP` |
 | `WAKE` | 唤醒 | `OK WAKE` |
 
 ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
-`SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时会停止当前音视频播放。
+`SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时只停止当前视频/图片显示，音频继续播放。
 `IMG` 仅支持 Baseline `.jpg/.jpeg`，文件不超过 1 MiB、解码尺寸不超过 320×320；小图居中，Progressive JPEG 需先转为 Baseline。读取按 16 KiB 分块进行，显示按 40 行 SRAM DMA 条带提交，UART 可继续处理状态查询。
+`VPLAY`、`IMG` 与 `APLAY` 的音频/显示状态相互独立；`SLEEP` 属于整机操作，会停止两者。
 
 ## 播放器类型
 

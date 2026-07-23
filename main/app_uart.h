@@ -1,5 +1,16 @@
 #pragma once
 
+typedef enum
+{
+    DISPLAY_IDLE = 0,
+    DISPLAY_VIDEO_PLAYING,
+    DISPLAY_VIDEO_PAUSED,
+    DISPLAY_IMAGE_LOADING,
+    DISPLAY_SLEEP,
+} display_mode_t;
+
+extern display_mode_t g_display_mode;
+
 /**
  * @brief  UART 指令系统 (CA51F352P4 → ESP32)
  *

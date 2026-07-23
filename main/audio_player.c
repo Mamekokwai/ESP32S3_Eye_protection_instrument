@@ -13,11 +13,17 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #define TAG "audio_player"
 #define CHUNK_SIZE  2048  /* 每次 tick 读取的字节数 */
 #define MP3_INPUT_SIZE 4096
 #define MP3_PCM_BYTES  4608
+#define AUDIO_TASK_STACK_SIZE 6144
+#define AUDIO_TASK_PRIORITY   5
+#define AUDIO_TASK_CORE       1
 
 typedef enum {
     AUDIO_FMT_PCM,
@@ -46,6 +52,22 @@ typedef struct {
 } ap_ctx_t;
 
 static ap_ctx_t g_ap = { .volume = 70, .loop = true };
+static SemaphoreHandle_t g_audio_mutex;
+static TaskHandle_t g_audio_task;
+
+static void audio_player_stop_locked(void);
+
+static void audio_lock(void)
+{
+    if (g_audio_mutex)
+        xSemaphoreTakeRecursive(g_audio_mutex, portMAX_DELAY);
+}
+
+static void audio_unlock(void)
+{
+    if (g_audio_mutex)
+        xSemaphoreGiveRecursive(g_audio_mutex);
+}
 
 static bool has_audio_extension(const char *name)
 {
@@ -57,11 +79,12 @@ static bool has_audio_extension(const char *name)
 
 /* ====== 公开 API ====== */
 
-esp_err_t audio_player_init(const char *filename)
+static esp_err_t audio_player_init_locked(const char *filename)
 {
     int volume = g_ap.volume ? g_ap.volume : 70;
     bool muted = g_ap.muted;
-    if (g_ap.initialized) audio_player_stop();
+    if (g_ap.initialized)
+        audio_player_stop_locked();
     memset(&g_ap, 0, sizeof(g_ap));
     g_ap.volume = volume;
     g_ap.muted   = muted;
@@ -99,11 +122,11 @@ esp_err_t audio_player_init(const char *filename)
         g_ap.mp3_pcm = heap_caps_malloc(MP3_PCM_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         if (!g_ap.decoder || !g_ap.mp3_input || !g_ap.mp3_pcm) {
             ESP_LOGE(TAG, "MP3 buffer allocation failed");
-            audio_player_stop();
+            audio_player_stop_locked();
             return ESP_ERR_NO_MEM;
         }
     } else if (audio_set_sample_rate(16000) != ESP_OK) {
-        audio_player_stop();
+        audio_player_stop_locked();
         return ESP_FAIL;
     }
 
@@ -113,7 +136,7 @@ esp_err_t audio_player_init(const char *filename)
     return ESP_OK;
 }
 
-player_ret_t audio_player_tick(void)
+static player_ret_t audio_player_tick_locked(void)
 {
     if (!g_ap.initialized) return PLAYER_ERROR;
     if (g_ap.muted) return PLAYER_BUSY;
@@ -129,7 +152,7 @@ player_ret_t audio_player_tick(void)
                 }
                 if (br == 0) {
                     if (!g_ap.loop) {
-                        audio_player_stop();
+                        audio_player_stop_locked();
                         return PLAYER_OK;
                     }
                     f_lseek(&g_ap.file, 0);
@@ -194,7 +217,7 @@ player_ret_t audio_player_tick(void)
             g_ap.chunks_done = 0;
             ESP_LOGI(TAG, "Loop restart");
         } else {
-            audio_player_stop();
+            audio_player_stop_locked();
             return PLAYER_OK;
         }
     }
@@ -221,7 +244,7 @@ player_ret_t audio_player_tick(void)
     return PLAYER_OK;
 }
 
-void audio_player_stop(void)
+static void audio_player_stop_locked(void)
 {
     if (!g_ap.initialized) return;
 
@@ -239,28 +262,111 @@ void audio_player_stop(void)
     g_ap.initialized = false;
 }
 
+static void audio_service_task(void *arg)
+{
+    (void)arg;
+    while (1)
+    {
+        audio_lock();
+        if (g_ap.initialized &&
+            audio_player_tick_locked() == PLAYER_ERROR)
+        {
+            ESP_LOGE(TAG, "Audio service playback error");
+            audio_player_stop_locked();
+        }
+        audio_unlock();
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+esp_err_t audio_player_start_service(void)
+{
+    if (g_audio_task)
+        return ESP_OK;
+
+    if (!g_audio_mutex)
+    {
+        g_audio_mutex = xSemaphoreCreateRecursiveMutex();
+        if (!g_audio_mutex)
+            return ESP_ERR_NO_MEM;
+    }
+
+    BaseType_t created = xTaskCreatePinnedToCore(
+        audio_service_task, "audio_player", AUDIO_TASK_STACK_SIZE,
+        NULL, AUDIO_TASK_PRIORITY, &g_audio_task, AUDIO_TASK_CORE);
+    if (created != pdPASS)
+    {
+        vSemaphoreDelete(g_audio_mutex);
+        g_audio_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "Audio service started on CPU%d", AUDIO_TASK_CORE);
+    return ESP_OK;
+}
+
+esp_err_t audio_player_init(const char *filename)
+{
+    audio_lock();
+    esp_err_t ret = audio_player_init_locked(filename);
+    audio_unlock();
+    return ret;
+}
+
+player_ret_t audio_player_tick(void)
+{
+    audio_lock();
+    player_ret_t ret = g_ap.initialized
+                           ? audio_player_tick_locked()
+                           : PLAYER_BUSY;
+    audio_unlock();
+    return ret;
+}
+
+void audio_player_stop(void)
+{
+    audio_lock();
+    audio_player_stop_locked();
+    audio_unlock();
+}
+
+bool audio_player_is_active(void)
+{
+    audio_lock();
+    bool active = g_ap.initialized;
+    audio_unlock();
+    return active;
+}
+
 void audio_player_set_volume(int vol)
 {
+    audio_lock();
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
     g_ap.volume = vol;
     audio_set_volume(vol);
+    audio_unlock();
 }
 
 bool audio_player_toggle_mute(void)
 {
+    audio_lock();
     g_ap.muted = !g_ap.muted;
     if (g_ap.muted) {
         audio_set_volume(0);
     } else {
         audio_set_volume(g_ap.volume);
     }
-    return g_ap.muted;
+    bool muted = g_ap.muted;
+    audio_unlock();
+    return muted;
 }
 
 const char *audio_player_current_file(void)
 {
-    return g_ap.initialized ? g_ap.filename : NULL;
+    audio_lock();
+    const char *filename = g_ap.initialized ? g_ap.filename : NULL;
+    audio_unlock();
+    return filename;
 }
 
 int audio_player_list_files(char *out_buf, size_t out_len)

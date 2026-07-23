@@ -43,13 +43,13 @@
 | `AMUTE` | 切换静音 | `OK AMUTE on/off` |
 | `VOL <0-100>` | 设置音量 | `OK VOL <value>` |
 
-启动视频、音频或图片前，当前其它媒体会被停止。图片显示期间可继续发送 `STATUS`；完成后状态自动回到 `idle`。
+音频状态与显示状态独立：`APLAY` 不会停止视频或取消图片加载，`VPLAY`、`IMG`、`SDLIST` 也不会停止音频。视频和图片共用 LCD，因此二者仍互斥。音频运行于 CPU1 独立任务，显示调度运行于 CPU0；各媒体独立播放，不做音画时间轴同步。`SLEEP` 会停止显示和音频。
 
 ## 系统指令
 
 | 指令 | 说明 |
 |---|---|
-| `STATUS` | 查询当前模式、音频文件 |
+| `STATUS` | 分别查询显示状态和当前音频文件 |
 | `INFO` | 查询剩余堆内存 |
 | `SLEEP` / `WAKE` | 进入/退出休眠画面 |
 | `DL` | 复位进入 ROM 下载模式 |
@@ -64,6 +64,8 @@
 ```text
 IMGLIST\n
 IMG 1\n
+APLAY music.mp3\n
 STATUS\n
 VSTOP\n
+ASTOP\n
 ```
