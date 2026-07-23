@@ -5,7 +5,7 @@
 This is an ESP-IDF v5.4.4 firmware project for an ESP32-S3-WROOM-1 eye-care device with dual 320x320 JD9855 round LCDs, ES8311 audio, SD card storage, and UART control.
 
 - `main/` contains the application state machine, UART command parser, flash/SD video players, audio player, AVI/MJPEG parsing, and embedded test assets.
-- `components/BSP/` contains board support drivers for LCD, SD SPI, I2C, keys, LEDs, and legacy expansion hardware.
+- `components/BSP/` contains board support drivers for LCD, SDMMC/SPI-fallback storage, I2C, and LEDs.
 - `components/esp_lcd_jd9855/` contains the LCD panel driver and initialization sequence.
 - `tools/` contains video conversion and flash-writing helpers.
 - `partitions.csv` and `sdkconfig.defaults` define the custom 16 MB flash layout and FreeRTOS tick settings.
@@ -39,4 +39,4 @@ Recent history uses concise imperative commits, often with prefixes such as `fea
 
 ## Security & Configuration Tips
 
-Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, UART, boot, or TE-related code; several pins are shared with hardware-critical functions.
+Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, UART, boot, or TE-related code. The current TF path is SDMMC 1-bit at 40 MHz; GPIO0 is not used for normal card transfer but is still the BOOT strap used by `DL`.

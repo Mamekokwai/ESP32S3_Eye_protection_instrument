@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 
 #include "esp_log.h"
-#include "spi_sd.h"
+#include "sd_card.h"
 #include "spilcd.h"
 
 #define SD_BROWSER_ROWS_PER_PAGE 12
@@ -29,7 +29,8 @@ static bool entry_is_directory(const struct dirent *entry)
 
     char path[320];
     struct stat info;
-    int length = snprintf(path, sizeof(path), "%s/%s", MOUNT_POINT, entry->d_name);
+    int length = snprintf(path, sizeof(path), "%s/%s",
+                          SD_CARD_MOUNT_POINT, entry->d_name);
     return length > 0 && length < (int)sizeof(path) &&
            stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
@@ -56,21 +57,22 @@ static DIR *open_root_with_remount(esp_err_t *result)
 {
     for (int attempt = 0; attempt < 2; attempt++)
     {
-        if (!sd_spi_is_mounted() || attempt > 0)
+        if (!sd_card_is_mounted() || attempt > 0)
         {
-            *result = sd_spi_init();
-            if (*result != ESP_OK || !sd_spi_is_mounted())
+            *result = sd_card_mount();
+            if (*result != ESP_OK || !sd_card_is_mounted())
                 continue;
         }
 
-        DIR *directory = opendir(MOUNT_POINT);
+        DIR *directory = opendir(SD_CARD_MOUNT_POINT);
         if (directory)
         {
             *result = ESP_OK;
             return directory;
         }
         *result = ESP_FAIL;
-        ESP_LOGW(TAG, "Cannot open %s, remounting TF card", MOUNT_POINT);
+        ESP_LOGW(TAG, "Cannot open %s, remounting TF card",
+                 SD_CARD_MOUNT_POINT);
     }
     return NULL;
 }
@@ -90,7 +92,7 @@ esp_err_t sd_browser_show_page(int requested_page, int *shown_page,
     if (!directory)
     {
         ESP_LOGE(TAG, "TF card unavailable: %s", esp_err_to_name(ret));
-        show_error(sd_spi_is_mounted() ? "OPEN FAILED" : "INSERT CARD");
+        show_error(sd_card_is_mounted() ? "OPEN FAILED" : "INSERT CARD");
         return ret;
     }
 

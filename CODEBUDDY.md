@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-ESP32-S3-WROOM-1 (YT06 主板 V1.1) 眼保仪固件。双 320×320 圆屏 (i80 8080 8-bit 并口, JD9855 IC)、ES8311 音频 DAC、CA51F352P4 触控 MCU、TF 卡 SPI、16MB Flash + 8MB PSRAM。
+ESP32-S3-WROOM-1 (YT06 主板 V1.1) 眼保仪固件。双 320×320 圆屏 (i80 8080 8-bit 并口, JD9855 IC)、ES8311 音频 DAC、CA51F352P4 触控 MCU、TF 卡 SDMMC 1-bit、16MB Flash + 8MB PSRAM。
 
 **控制方式**: CA51F352P4 → UART 指令 → ESP32 从机执行。
 
@@ -54,7 +54,7 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 
 ### 4. 播放器非阻塞状态机
 
-`flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；每次最多提交一条 40行×25KB 条带。
+`flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；Flash 视频使用双 40 行条带，TF 视频使用单 160 行条带。
 
 显示状态和音频状态相互独立：视频/图片共用 LCD，二者互斥；音频固定在 CPU1 的 FreeRTOS 任务中每 5ms 推进，可与 CPU0 上的视频播放或图片加载同时运行，不做音画同步。音频接口使用递归互斥锁保护，I2S 阻塞写入不会阻塞 LCD 主循环。
 
@@ -74,6 +74,7 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 main/
 ├── main.c              # 主循环 + workspace 调度 + state machine
 ├── app_uart.c/h        # UART 指令接收/解析/响应
+├── media_catalog.c/h   # 统一媒体列表、序号/文件名选择和扩展名校验
 ├── flash_player.c/h    # Flash AVI 播放器 (tick化, 非阻塞状态机)
 ├── audio_player.c/h    # SD 卡 PCM/MP3 音频 (tick化)
 ├── image_viewer.c/h    # SD 卡 JPEG 图片 (16KiB 分块读取 + SRAM DMA 条带显示)
@@ -87,8 +88,8 @@ main/
 
 components/BSP/
 ├── SPILCD/spilcd.c/h   # LCD i80 驱动 + TE 诊断 + 绘图函数
-├── SPI_SD/spi_sd.c/h   # TF 卡 SPI/SDMMC
-├── MYSPI/my_spi.c/h    # SPI 总线
+├── SD_CARD/             # TF 卡 SDMMC/SPI 回退配置和挂载服务
+├── SPI_SD/spi_sd.h     # 旧 sd_spi_* API 兼容头
 ├── MYIIC/my_iic.c/h    # I2C (ES8311)
 ├── KEY/key.c/h         # 旧 BOOT 按键代码，已停止编译
 ├── LED/led.c/h         # LED 心跳 (IO2)
@@ -123,9 +124,9 @@ tools/                   # 视频转换 + 烧录脚本
 | LCD TE | IO1 | INPUT+PULLUP, JD9855 未输出 |
 | LCD RST | IO3 | |
 | SD CLK | IO21 | |
-| SD MOSI | IO47 | |
-| SD MISO | IO14 | |
-| SD CS | IO0 | 和 BOOT 共享 |
+| SD CMD | IO47 | |
+| SD D0 | IO14 | |
+| SD DAT3/BOOT | IO0 | 1-bit 运行时不用；`DL` 复位时拉低 |
 | ES8311 I2C | SDA=IO4 SCL=IO5 | |
 | ES8311 I2S | MCLK=IO45 BCLK=IO39 WS=IO41 DOUT=IO42 | |
 | UART1 RX | IO44 | CA51F352P4 → ESP32 |
@@ -152,8 +153,8 @@ tools/                   # 视频转换 + 烧录脚本
 | SLEEP / WAKE | 休眠/唤醒 |
 | DL / RST | 烧录模式/重启 |
 
-`IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 40 行 DMA 条带。
-`VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频解码固定 CPU0、音频固定 CPU1；TF 视频帧缓冲位于 PSRAM并显式同步 cache，LCD 采用与 IMG 一致的单个内部 SRAM 80 行条带逐窗口 DMA。
+`IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 80 行 DMA 条带。
+`VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频解码固定 CPU0、音频固定 CPU1；TF 视频帧缓冲位于 PSRAM并显式同步 cache，LCD 使用单个内部 SRAM 160 行条带逐窗口 DMA。
 TF 视频每 100 帧打印 `VID profile`，包含 SD 读取、JPEG 解码、cache 同步、PSRAM→SRAM、LCD 提交/刷新及等待阶段的耗时和窗口占比。
 
 ## 开发经验文档

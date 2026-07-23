@@ -17,16 +17,13 @@
 #include "video_player.h"
 #include "avi.h"
 #include "mjpeg.h"
+#include "media_catalog.h"
 #include "spilcd.h"
-#include "spi_sd.h"
+#include "ff.h"
 #include "esp_cache.h"
-#include <dirent.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -360,117 +357,16 @@ static vp_ctx_t g_vp = {0};
 
 /* ====== 公开 API ====== */
 
-static bool has_avi_extension(const char *name)
-{
-    size_t length = strlen(name);
-    return length > 4 && strcasecmp(name + length - 4, ".avi") == 0;
-}
-
-static DIR *open_sd_root(void)
-{
-    for (int attempt = 0; attempt < 2; attempt++)
-    {
-        if (!sd_spi_is_mounted() || attempt > 0)
-        {
-            if (sd_spi_init() != ESP_OK || !sd_spi_is_mounted())
-                continue;
-        }
-        DIR *directory = opendir(MOUNT_POINT);
-        if (directory)
-            return directory;
-    }
-    return NULL;
-}
-
-static esp_err_t resolve_video_selection(const char *selection,
-                                         char *name, size_t name_size)
-{
-    if (!selection || !selection[0] || !name || name_size == 0)
-        return ESP_ERR_INVALID_ARG;
-
-    char *end = NULL;
-    long requested = strtol(selection, &end, 10);
-    if (selection != end && *end == '\0')
-    {
-        if (requested < 1 || requested > INT_MAX)
-            return ESP_ERR_INVALID_ARG;
-        DIR *directory = open_sd_root();
-        if (!directory)
-            return ESP_FAIL;
-        int index = 0;
-        struct dirent *entry;
-        while ((entry = readdir(directory)) != NULL)
-        {
-            if (!has_avi_extension(entry->d_name))
-                continue;
-            if (++index == requested)
-            {
-                int written = snprintf(name, name_size, "%s", entry->d_name);
-                closedir(directory);
-                return written > 0 && written < (int)name_size
-                           ? ESP_OK
-                           : ESP_ERR_INVALID_SIZE;
-            }
-        }
-        closedir(directory);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    const char *plain = selection;
-    if (strncmp(plain, "/0:/", 4) == 0)
-        plain += 4;
-    else if (strncmp(plain, "0:/", 3) == 0)
-        plain += 3;
-    else if (plain[0] == '/')
-        plain++;
-
-    if (!plain[0] || strchr(plain, '/') || strchr(plain, '\\') ||
-        strcmp(plain, ".") == 0 || strcmp(plain, "..") == 0 ||
-        !has_avi_extension(plain))
-        return ESP_ERR_INVALID_ARG;
-
-    int written = snprintf(name, name_size, "%s", plain);
-    return written > 0 && written < (int)name_size
-               ? ESP_OK
-               : ESP_ERR_INVALID_SIZE;
-}
-
 int video_player_list_files(char *output, size_t output_size)
 {
-    if (!output || output_size == 0)
-        return -1;
-    output[0] = '\0';
-
-    DIR *directory = open_sd_root();
-    if (!directory)
-        return -1;
-
-    int count = 0;
-    size_t used = 0;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL)
-    {
-        if (!has_avi_extension(entry->d_name))
-            continue;
-        count++;
-        if (used + 1 >= output_size)
-            continue;
-        int written = snprintf(output + used, output_size - used,
-                               "%d=%s\n", count, entry->d_name);
-        if (written < 0)
-            continue;
-        used += (size_t)written < output_size - used
-                    ? (size_t)written
-                    : output_size - used - 1;
-    }
-    closedir(directory);
-    return count;
+    return media_catalog_list(MEDIA_VIDEO, output, output_size);
 }
 
 esp_err_t video_player_start(const char *selection)
 {
     char name[256];
-    esp_err_t ret = resolve_video_selection(selection, name, sizeof(name));
+    esp_err_t ret = media_catalog_resolve(
+        MEDIA_VIDEO, selection, name, sizeof(name));
     if (ret != ESP_OK)
         return ret;
 

@@ -5,11 +5,12 @@
  */
 #include "audio_player.h"
 #include "audio.h"
+#include "media_catalog.h"
 #include "mp3_decoder_wrapper.h"
-#include "spi_sd.h"
 #include "ff.h"
+#include <stdio.h>
 #include <string.h>
-#include <dirent.h>
+#include <strings.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -67,14 +68,6 @@ static void audio_unlock(void)
 {
     if (g_audio_mutex)
         xSemaphoreGiveRecursive(g_audio_mutex);
-}
-
-static bool has_audio_extension(const char *name)
-{
-    size_t len = strlen(name);
-    return len > 4 &&
-           (strcasecmp(name + len - 4, ".pcm") == 0 ||
-            strcasecmp(name + len - 4, ".mp3") == 0);
 }
 
 /* ====== 公开 API ====== */
@@ -312,6 +305,21 @@ esp_err_t audio_player_init(const char *filename)
     return ret;
 }
 
+esp_err_t audio_player_start(const char *selection)
+{
+    char name[256];
+    esp_err_t ret = media_catalog_resolve(
+        MEDIA_AUDIO, selection, name, sizeof(name));
+    if (ret != ESP_OK)
+        return ret;
+
+    char path[272];
+    int written = snprintf(path, sizeof(path), "0:%s", name);
+    if (written <= 0 || written >= (int)sizeof(path))
+        return ESP_ERR_INVALID_SIZE;
+    return audio_player_init(path);
+}
+
 player_ret_t audio_player_tick(void)
 {
     audio_lock();
@@ -371,33 +379,5 @@ const char *audio_player_current_file(void)
 
 int audio_player_list_files(char *out_buf, size_t out_len)
 {
-    if (!out_buf || out_len == 0) return 0;
-
-    DIR *dir = opendir("/0:");
-    if (!dir) {
-        snprintf(out_buf, out_len, "ERR no sd");
-        return -1;
-    }
-
-    int count = 0;
-    size_t pos = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        const char *name = entry->d_name;
-        /* PCM 原始音频和 MP3 使用同一套播放命令 */
-        if (has_audio_extension(name)) {
-            int n = snprintf(out_buf + pos, out_len - pos,
-                             "%d=%s\n", count + 1, name);
-            if (n > 0 && pos + n < out_len) {
-                pos += n;
-                count++;
-            }
-        }
-    }
-    closedir(dir);
-
-    if (count == 0) {
-        snprintf(out_buf, out_len, "NONE");
-    }
-    return count;
+    return media_catalog_list(MEDIA_AUDIO, out_buf, out_len);
 }

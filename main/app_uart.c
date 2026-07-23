@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
+#include <strings.h>
 #include <limits.h>
 // #include <fcntl.h>    /* TODO: USB-serial-JTAG stdin */
 // #include <errno.h>
@@ -331,50 +331,7 @@ static void cmd_handle(const char *cmd)
         while (*arg == ' ')
             arg++;
 
-        char path[272] = {0};
-        if (arg[0] == '/')
-        {
-            snprintf(path, sizeof(path), "/0:%s",
-                     arg + (arg[1] == '0' && arg[2] == ':' ? 3 : 0));
-        }
-        else if (arg[0] >= '0' && arg[0] <= '9')
-        {
-            int idx = atoi(arg);
-            DIR *dir = opendir("/0:");
-            if (!dir)
-            {
-                uart_send_str("ERR no sd");
-                return;
-            }
-            int cnt = 0;
-            struct dirent *e;
-            while ((e = readdir(dir)) != NULL)
-            {
-                size_t l = strlen(e->d_name);
-                if (l > 4 &&
-                    (strcasecmp(e->d_name + l - 4, ".pcm") == 0 ||
-                     strcasecmp(e->d_name + l - 4, ".mp3") == 0))
-                {
-                    if (++cnt == idx)
-                    {
-                        snprintf(path, sizeof(path), "0:%s", e->d_name);
-                        break;
-                    }
-                }
-            }
-            closedir(dir);
-            if (path[0] == 0)
-            {
-                uart_send_str("ERR no such file");
-                return;
-            }
-        }
-        else
-        {
-            snprintf(path, sizeof(path), "0:%s", arg);
-        }
-
-        if (audio_player_init(path) == ESP_OK)
+        if (audio_player_start(arg) == ESP_OK)
         {
             uart_send_str("OK APLAY");
         }

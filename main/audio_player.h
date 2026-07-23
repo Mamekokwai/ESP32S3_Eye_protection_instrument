@@ -25,6 +25,12 @@ esp_err_t audio_player_start_service(void);
 esp_err_t audio_player_init(const char *filename);
 
 /**
+ * @brief  按序号或根目录文件名启动音频
+ * @param  selection "1"、"music.mp3" 或 "music.pcm"
+ */
+esp_err_t audio_player_start(const char *selection);
+
+/**
  * @brief  推进播放 (每次 tick 读一块数据 → I2S)
  */
 player_ret_t audio_player_tick(void);

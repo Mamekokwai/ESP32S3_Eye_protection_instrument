@@ -6,105 +6,22 @@
  */
 
 #include <stdio.h>
-#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
-// #include "esp_adc/adc_oneshot.h"   /* DEBUG: GPIO0 ADC 电压检测, 暂时不用 */
 #include "audio.h"
-#include "my_spi.h"
 #include "spilcd.h"
-#include "spi_sd.h"
+#include "sd_card.h"
 #include "flash_player.h"
 #include "video_player.h"
 #include "audio_player.h"
 #include "image_viewer.h"
 #include "app_uart.h"
-#include "esp_cache.h"
 
 #define TAG "app"
-
-/* ====== PSRAM vs Internal DMA 显示诊断 ====== */
-#define DIAG_STRIP_H 40
-#define DIAG_FRAMES 60
-
-typedef enum
-{
-    BUF_INTERNAL_DMA,
-    BUF_PSRAM,
-    BUF_PSRAM_CACHED
-} buf_type_t;
-
-/* 用指定内存类型填充全屏纯色并发送, 测帧率和显示 */
-static void __attribute__((unused)) diag_fill_test(const char *label, buf_type_t btype, uint16_t color, int fps_target)
-{
-    int w = 320, h = 320;
-    size_t buf_sz = w * DIAG_STRIP_H * sizeof(uint16_t);
-    uint16_t *buf;
-
-    if (btype == BUF_INTERNAL_DMA)
-    {
-        buf = heap_caps_malloc(buf_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    }
-    else
-    {
-        buf = heap_caps_aligned_alloc(64, buf_sz, MALLOC_CAP_SPIRAM);
-    }
-    if (!buf)
-    {
-        ESP_LOGE(TAG, "%s: alloc fail", label);
-        return;
-    }
-
-    /* 填充颜色 */
-    for (int i = 0; i < w * DIAG_STRIP_H; i++)
-        buf[i] = color;
-
-    int64_t t0 = esp_timer_get_time();
-    for (int f = 0; f < DIAG_FRAMES; f++)
-    {
-        /* 每帧变色调, 确认帧在刷新 */
-        {
-            uint16_t c = color;
-            if (f % 3 == 1)
-                c = 0x07E0; /* GREEN */
-            if (f % 3 == 2)
-                c = 0x001F; /* BLUE */
-            for (int i = 0; i < w * DIAG_STRIP_H; i++)
-                buf[i] = c;
-        }
-
-        /* cache sync once (buffer 不变, 每帧只需一次) */
-        if (btype == BUF_PSRAM_CACHED)
-            esp_cache_msync(buf, buf_sz, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-
-        for (int ys = 0; ys < h; ys += DIAG_STRIP_H)
-        {
-            int row_h = (ys + DIAG_STRIP_H > h) ? h - ys : DIAG_STRIP_H;
-            refresh_done_flag = 0;
-            esp_lcd_panel_draw_bitmap(panel_handle, 0, ys, w, ys + row_h, buf);
-            while (!refresh_done_flag)
-                vTaskDelay(1);
-        }
-
-        /* 帧率控制 */
-        if (fps_target > 0)
-        {
-            int64_t target = t0 + (f + 1) * 1000000LL / fps_target;
-            while (esp_timer_get_time() < target)
-                vTaskDelay(1);
-        }
-    }
-    int64_t elapsed = esp_timer_get_time() - t0;
-    float fps = DIAG_FRAMES * 1e6f / elapsed;
-    ESP_LOGI(TAG, "%s: %.1f fps, %lld ms, mem=%s",
-             label, fps, elapsed / 1000,
-             btype == BUF_INTERNAL_DMA ? "internal" : "psram");
-
-    heap_caps_free(buf);
-}
 
 /* ====== 1ms Tick (Semaphore, 不忙等, 不丢 tick) ====== */
 #include "freertos/semphr.h"
@@ -165,15 +82,18 @@ static void display_tick(void)
         if (image_state == IMAGE_VIEWER_DONE)
         {
             char response[192];
-            snprintf(response, sizeof(response), "OK IMG %s %lux%lu", image_viewer_name(),
-                     (unsigned long)image_viewer_width(), (unsigned long)image_viewer_height());
+            snprintf(response, sizeof(response), "OK IMG %s %lux%lu",
+                     image_viewer_name(),
+                     (unsigned long)image_viewer_width(),
+                     (unsigned long)image_viewer_height());
             app_uart_send(response);
             g_display_mode = DISPLAY_IDLE;
         }
         else if (image_state == IMAGE_VIEWER_ERROR)
         {
             char response[64];
-            snprintf(response, sizeof(response), "ERR IMG %s", esp_err_to_name(image_viewer_last_error()));
+            snprintf(response, sizeof(response), "ERR IMG %s",
+                     esp_err_to_name(image_viewer_last_error()));
             app_uart_send(response);
             g_display_mode = DISPLAY_IDLE;
         }
@@ -207,47 +127,19 @@ void app_main(void)
     ESP_LOGI(TAG, "audio init");
     esp_err_t audio_ret = audio_init();
     if (audio_ret != ESP_OK)
-        ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue", esp_err_to_name(audio_ret));
+        ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue",
+                 esp_err_to_name(audio_ret));
     ESP_ERROR_CHECK(audio_player_start_service());
-#if SD_PROTOCOL == SD_PROTOCOL_SPI
-    ESP_LOGI(TAG, "TF SPI init");
-    ESP_ERROR_CHECK(my_spi_init());
-#else
-    ESP_LOGI(TAG, "TF SDMMC mode: SPI2 init skipped");
-#endif
+
     ESP_LOGI(TAG, "LCD init");
     spilcd_init();
+
     ESP_LOGI(TAG, "SD mount...");
-    sd_spi_init(); /* 音频用, 失败不阻塞 */
+    esp_err_t sd_ret = sd_card_mount();
+    if (sd_ret != ESP_OK)
+        ESP_LOGW(TAG, "SD mount failed: %s", esp_err_to_name(sd_ret));
 
-    //     /* 显示测试图片 */
-    //     {
-    //         extern const uint8_t testimage_data[];
-    // #define IMG_STRIP_H 20
-    //         uint16_t *buf = heap_caps_malloc(320 * IMG_STRIP_H * sizeof(uint16_t), MALLOC_CAP_DMA);
-    //         if (!buf)
-    //         {
-    //             ESP_LOGE(TAG, "DMA buf alloc failed");
-    //         }
-    //         else
-    //         {
-    //             for (int y = 0; y < 320; y += IMG_STRIP_H)
-    //             {
-    //                 int h = (y + IMG_STRIP_H > 320) ? 320 - y : IMG_STRIP_H;
-    //                 memcpy(buf, testimage_data + y * 320 * 2, 320 * h * 2);
-    //                 refresh_done_flag = 0;
-    //                 esp_lcd_panel_draw_bitmap(panel_handle, 0, y, 320, y + h, buf);
-    //                 while (!refresh_done_flag)
-    //                     vTaskDelay(1);
-    //             }
-    //             heap_caps_free(buf);
-    //             ESP_LOGI(TAG, "image draw done");
-    //         }
-    //     }
-
-    // gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
-    // gpio_config(&lc);
-    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT); // LED 改用 IO2
+    ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT));
 
     app_uart_init();
 
@@ -259,17 +151,19 @@ void app_main(void)
     }
 
     s_tick_sem = xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(s_tick_sem ? ESP_OK : ESP_ERR_NO_MEM);
 
-    esp_timer_create_args_t ta = {.callback = tick_isr, .name = "tick"};
-    esp_timer_handle_t tt;
-    esp_timer_create(&ta, &tt);
-    esp_timer_start_periodic(tt, 1000);
+    const esp_timer_create_args_t timer_config = {
+        .callback = tick_isr,
+        .name = "tick",
+    };
+    esp_timer_handle_t tick_timer;
+    ESP_ERROR_CHECK(esp_timer_create(&timer_config, &tick_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, 1000));
 
     /* 主循环 */
     static uint8_t ws = WS_NUM - 1;
     ESP_LOGI(TAG, "loop start");
-
-    static uint16_t test1 = 0;
 
     while (1)
     {
@@ -277,25 +171,11 @@ void app_main(void)
         if (++ws >= WS_NUM)
             ws = 0;
 
-        /* LCD 每条 40 行 DMA 约 5.1ms；视频每 1ms 检查一次可及时续传，
-         * 音频仍保留在 5ms workspace 中，避免改变其阻塞写入节奏。 */
+        /* 视频每 1ms 检查一次以衔接异步解码和条带 DMA；
+         * 音频仍保留独立 CPU1 服务任务。 */
         if (g_display_mode == DISPLAY_VIDEO_PLAYING ||
             g_display_mode == DISPLAY_SD_VIDEO_PLAYING)
             display_tick();
-        // 颜色测试
-        //  if (++test1 >= 1000)
-        //  {
-        //      test1 = 0;
-        //      spilcd_fill_raw(0, 0, 320, 320, 0XF800); /* 测试: 每 10ms 填充红色 */
-        //      ESP_LOGI(TAG, "测试信息");
-        //  }
-
-        // // 1S打印一次日志 不要删除
-        // if (++test1 >= 1000)
-        // {
-        //     test1 = 0;
-        //     ESP_LOGI(TAG, "测试信息");
-        // }
 
         switch (ws)
         {

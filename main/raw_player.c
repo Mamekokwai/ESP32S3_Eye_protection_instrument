@@ -5,7 +5,7 @@
  */
 #include "raw_player.h"
 #include "spilcd.h"
-#include "spi_sd.h"
+#include "sd_card.h"
 #include "ff.h"
 #include "sdmmc_cmd.h"
 #include <string.h>
@@ -17,8 +17,6 @@
 #define TAG "raw_player"
 
 extern esp_lcd_panel_handle_t panel_handle;
-extern sdmmc_card_t *card;
-
 #define RAW_MAGIC   0x56574152  /* "RAWV" */
 #define DMA_CHUNK   (16 * 1024)
 
@@ -129,6 +127,8 @@ esp_err_t raw_player_init(const char *filename)
 player_ret_t raw_player_tick(void)
 {
     if (!g_rp.initialized) return PLAYER_ERROR;
+    sdmmc_card_t *card = sd_card_handle();
+    if (!card) return PLAYER_ERROR;
 
     /* 检查是否播完 */
     if (g_rp.current_frame >= g_rp.hdr.total_frames) {

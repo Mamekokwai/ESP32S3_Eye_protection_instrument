@@ -1,20 +1,17 @@
 #include "image_viewer.h"
 
-#include <dirent.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "media_catalog.h"
 #include "mjpeg.h"
-#include "spi_sd.h"
+#include "sd_card.h"
 #include "spilcd.h"
 
 #define IMAGE_MAX_FILE_SIZE   (1024U * 1024U)
@@ -61,22 +58,6 @@ typedef struct
 static const char *TAG = "image_viewer";
 static image_context_t s_image;
 
-static bool has_jpeg_extension(const char *name)
-{
-    size_t length = strlen(name);
-    return (length > 4 && strcasecmp(name + length - 4, ".jpg") == 0) ||
-           (length > 5 && strcasecmp(name + length - 5, ".jpeg") == 0);
-}
-
-static bool copy_name(char *output, size_t output_size, const char *name)
-{
-    size_t length = strlen(name);
-    if (output_size == 0 || length >= output_size)
-        return false;
-    memcpy(output, name, length + 1);
-    return true;
-}
-
 static void release_resources(void)
 {
     if (s_image.file)
@@ -106,101 +87,6 @@ static image_viewer_state_t fail_loading(esp_err_t error, const char *detail)
     ESP_LOGE(TAG, "Cannot display %s: %s", s_image.name,
              esp_err_to_name(error));
     return IMAGE_VIEWER_ERROR;
-}
-
-static DIR *open_root(esp_err_t *result)
-{
-    for (int attempt = 0; attempt < 2; attempt++)
-    {
-        if (!sd_spi_is_mounted() || attempt > 0)
-        {
-            *result = sd_spi_init();
-            if (*result != ESP_OK || !sd_spi_is_mounted())
-                continue;
-        }
-
-        DIR *directory = opendir(MOUNT_POINT);
-        if (directory)
-        {
-            *result = ESP_OK;
-            return directory;
-        }
-        *result = ESP_FAIL;
-        ESP_LOGW(TAG, "Cannot open %s, remounting TF card", MOUNT_POINT);
-    }
-    return NULL;
-}
-
-static bool parse_index(const char *selection, int *index)
-{
-    char *end = NULL;
-    long value = strtol(selection, &end, 10);
-    if (selection == end || *end != '\0' || value < 1 || value > INT_MAX)
-        return false;
-    *index = (int)value;
-    return true;
-}
-
-static esp_err_t resolve_selection(const char *selection, char *path,
-                                   size_t path_size)
-{
-    if (!selection || !selection[0])
-        return ESP_ERR_INVALID_ARG;
-
-    int requested_index = 0;
-    if (parse_index(selection, &requested_index))
-    {
-        esp_err_t ret = ESP_FAIL;
-        DIR *directory = open_root(&ret);
-        if (!directory)
-            return ret;
-
-        int current_index = 0;
-        struct dirent *entry;
-        while ((entry = readdir(directory)) != NULL)
-        {
-            if (!has_jpeg_extension(entry->d_name))
-                continue;
-            if (++current_index == requested_index)
-            {
-                bool copied = copy_name(s_image.name, sizeof(s_image.name),
-                                        entry->d_name);
-                closedir(directory);
-                if (!copied)
-                    return ESP_ERR_INVALID_SIZE;
-                int length = snprintf(path, path_size, "%s/%s",
-                                      MOUNT_POINT, s_image.name);
-                return length > 0 && length < (int)path_size
-                           ? ESP_OK
-                           : ESP_ERR_INVALID_SIZE;
-            }
-        }
-        closedir(directory);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    const char *name = selection;
-    if (strncmp(name, "/0:/", 4) == 0)
-        name += 4;
-    else if (strncmp(name, "0:/", 3) == 0)
-        name += 3;
-    else if (strncmp(name, "/0:", 3) == 0)
-        name += 3;
-    else if (name[0] == '/')
-        name++;
-
-    if (!name[0] || strchr(name, '/') || strchr(name, '\\') ||
-        strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
-        !has_jpeg_extension(name))
-        return ESP_ERR_INVALID_ARG;
-    if (!copy_name(s_image.name, sizeof(s_image.name), name))
-        return ESP_ERR_INVALID_SIZE;
-
-    int length = snprintf(path, path_size, "%s/%s",
-                          MOUNT_POINT, s_image.name);
-    return length > 0 && length < (int)path_size
-               ? ESP_OK
-               : ESP_ERR_INVALID_SIZE;
 }
 
 static esp_err_t read_jpeg_dimensions(const uint8_t *data, size_t size,
@@ -254,56 +140,30 @@ static esp_err_t read_jpeg_dimensions(const uint8_t *data, size_t size,
 
 int image_viewer_list_files(char *output, size_t output_size)
 {
-    if (!output || output_size == 0)
-        return -1;
-    output[0] = '\0';
-
-    esp_err_t ret = ESP_FAIL;
-    DIR *directory = open_root(&ret);
-    if (!directory)
-        return -1;
-
-    int count = 0;
-    size_t used = 0;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL)
-    {
-        if (!has_jpeg_extension(entry->d_name))
-            continue;
-        count++;
-        if (used + 1 >= output_size)
-            continue;
-
-        int written = snprintf(output + used, output_size - used,
-                               "%d=%s\n", count, entry->d_name);
-        if (written < 0)
-            continue;
-        if ((size_t)written >= output_size - used)
-            used = output_size - 1;
-        else
-            used += (size_t)written;
-    }
-    closedir(directory);
-    return count;
+    return media_catalog_list(MEDIA_IMAGE, output, output_size);
 }
 
 esp_err_t image_viewer_start(const char *selection)
 {
     image_viewer_cancel();
 
-    if (!sd_spi_is_mounted() && sd_spi_init() != ESP_OK)
-    {
-        show_error("INSERT CARD");
-        return ESP_FAIL;
-    }
-
     char path[320];
-    esp_err_t ret = resolve_selection(selection, path, sizeof(path));
+    esp_err_t ret = media_catalog_resolve(
+        MEDIA_IMAGE, selection, s_image.name, sizeof(s_image.name));
     if (ret != ESP_OK)
     {
-        show_error(ret == ESP_ERR_NOT_FOUND ? "FILE NOT FOUND" : "BAD FILE NAME");
+        const char *detail = ret == ESP_ERR_NOT_FOUND
+                                 ? "FILE NOT FOUND"
+                             : ret == ESP_FAIL
+                                 ? "INSERT CARD"
+                                 : "BAD FILE NAME";
+        show_error(detail);
         return ret;
     }
+    int path_length = snprintf(path, sizeof(path), "%s/%s",
+                               SD_CARD_MOUNT_POINT, s_image.name);
+    if (path_length <= 0 || path_length >= (int)sizeof(path))
+        return ESP_ERR_INVALID_SIZE;
 
     s_image.file = fopen(path, "rb");
     if (!s_image.file)
