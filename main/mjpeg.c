@@ -98,20 +98,6 @@ esp_err_t mjpeg_decoder_decode(const uint8_t *jpeg_data, size_t jpeg_size,
     };
 
     jpeg_dec_header_info_t hdr;
-    /* DBG: 打印输入 JPEG 前 16 字节 */
-    {
-        static int dbg_in_cnt = 0;
-        if (dbg_in_cnt < 5) {
-            ESP_LOGI(TAG, "IN[%d] sz=%u: %02x %02x %02x %02x %02x %02x %02x %02x "
-                     "%02x %02x %02x %02x %02x %02x %02x %02x",
-                     dbg_in_cnt, (unsigned)jpeg_size,
-                     jpeg_data[0], jpeg_data[1], jpeg_data[2], jpeg_data[3],
-                     jpeg_data[4], jpeg_data[5], jpeg_data[6], jpeg_data[7],
-                     jpeg_data[8], jpeg_data[9], jpeg_data[10], jpeg_data[11],
-                     jpeg_data[12], jpeg_data[13], jpeg_data[14], jpeg_data[15]);
-            dbg_in_cnt++;
-        }
-    }
     jpeg_error_t ret = jpeg_dec_parse_header(s_dec, &io, &hdr);
     if (ret != JPEG_ERR_OK)
     {
@@ -138,21 +124,6 @@ esp_err_t mjpeg_decoder_decode(const uint8_t *jpeg_data, size_t jpeg_size,
         {
             ESP_LOGE(TAG, "decode: %d", ret);
             return ESP_FAIL;
-        }
-    }
-    /* DBG: 打印解码后前 16 像素 */
-    {
-        static int dbg_dec_cnt = 0;
-        if (dbg_dec_cnt < 5) {
-            ESP_LOGI(TAG, "DEC[%d] %dx%d: "
-                     "%04x %04x %04x %04x %04x %04x %04x %04x "
-                     "%04x %04x %04x %04x %04x %04x %04x %04x",
-                     dbg_dec_cnt, hdr.width, hdr.height,
-                     out_pixels[0], out_pixels[1], out_pixels[2], out_pixels[3],
-                     out_pixels[4], out_pixels[5], out_pixels[6], out_pixels[7],
-                     out_pixels[8], out_pixels[9], out_pixels[10], out_pixels[11],
-                     out_pixels[12], out_pixels[13], out_pixels[14], out_pixels[15]);
-            dbg_dec_cnt++;
         }
     }
     return ESP_OK;

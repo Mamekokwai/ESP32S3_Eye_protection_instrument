@@ -310,7 +310,7 @@ static void cmd_handle(const char *cmd)
 
     /* unknown */
     char r[64];
-    snprintf(r, sizeof(r), "ERR unknown: %s", cmd);
+    snprintf(r, sizeof(r), "ERR unknown: %.50s", cmd);
     uart_send_str(r);
 }
 

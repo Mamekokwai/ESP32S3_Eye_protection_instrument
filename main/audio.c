@@ -247,7 +247,7 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
         }
     }
 
-    ESP_LOGI(TAG, "Playback done (%d bytes)", total_written);
+    ESP_LOGD(TAG, "Playback chunk done (%d bytes)", total_written);
     return ESP_OK;
 }
 

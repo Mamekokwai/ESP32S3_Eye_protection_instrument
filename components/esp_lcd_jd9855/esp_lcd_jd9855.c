@@ -305,6 +305,26 @@ static esp_err_t panel_jd9855_draw_bitmap(esp_lcd_panel_t *panel, int x_start, i
 {
     jd9855_panel_t *jd9855 = __containerof(panel, jd9855_panel_t, base);
     assert((x_start < x_end) && (y_start < y_end) && "start position must be smaller than end position");
+    size_t len = (x_end - x_start) * (y_end - y_start) * jd9855->fb_bits_per_pixel / 8;
+    return esp_lcd_jd9855_draw_bitmap_start(panel, x_start, y_start, x_end, y_end,
+                                             color_data, len);
+}
+
+esp_err_t esp_lcd_jd9855_draw_bitmap_start(esp_lcd_panel_handle_t panel,
+                                            int x_start, int y_start,
+                                            int x_end, int y_end,
+                                            const void *color_data,
+                                            size_t color_size)
+{
+    ESP_RETURN_ON_FALSE(panel && color_data && color_size, ESP_ERR_INVALID_ARG,
+                        TAG, "invalid chunked draw argument");
+    ESP_RETURN_ON_FALSE(x_start < x_end && y_start < y_end, ESP_ERR_INVALID_ARG,
+                        TAG, "invalid draw window");
+    jd9855_panel_t *jd9855 = __containerof(panel, jd9855_panel_t, base);
+    size_t window_size = (size_t)(x_end - x_start) * (y_end - y_start) *
+                         jd9855->fb_bits_per_pixel / 8;
+    ESP_RETURN_ON_FALSE(color_size <= window_size, ESP_ERR_INVALID_SIZE,
+                        TAG, "first color chunk exceeds draw window");
     esp_lcd_panel_io_handle_t io = jd9855->io;
 
     x_start += jd9855->x_gap;
@@ -325,10 +345,22 @@ static esp_err_t panel_jd9855_draw_bitmap(esp_lcd_panel_t *panel, int x_start, i
         ((y_end - 1) >> 8) & 0xFF,
         (y_end - 1) & 0xFF,
     }, 4), TAG, "send command failed");
-    // transfer frame buffer
-    size_t len = (x_end - x_start) * (y_end - y_start) * jd9855->fb_bits_per_pixel / 8;
-    ESP_RETURN_ON_ERROR(tx_color(jd9855, io, LCD_CMD_RAMWR, color_data, len), TAG, "send color data failed");
+    ESP_RETURN_ON_ERROR(tx_color(jd9855, io, LCD_CMD_RAMWR, color_data, color_size),
+                        TAG, "send first color chunk failed");
 
+    return ESP_OK;
+}
+
+esp_err_t esp_lcd_jd9855_draw_bitmap_continue(esp_lcd_panel_handle_t panel,
+                                               const void *color_data,
+                                               size_t color_size)
+{
+    ESP_RETURN_ON_FALSE(panel && color_data && color_size, ESP_ERR_INVALID_ARG,
+                        TAG, "invalid continued draw argument");
+    jd9855_panel_t *jd9855 = __containerof(panel, jd9855_panel_t, base);
+    ESP_RETURN_ON_ERROR(tx_color(jd9855, jd9855->io, LCD_CMD_RAMWRC,
+                                 color_data, color_size),
+                        TAG, "send continued color chunk failed");
     return ESP_OK;
 }
 

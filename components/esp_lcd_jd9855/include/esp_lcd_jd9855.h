@@ -57,6 +57,24 @@ typedef struct {
 esp_err_t esp_lcd_new_panel_jd9855(const esp_lcd_panel_io_handle_t io, const esp_lcd_panel_dev_config_t *panel_dev_config, esp_lcd_panel_handle_t *ret_panel);
 
 /**
+ * @brief Start a chunked bitmap write over one fixed LCD window.
+ *
+ * The first chunk uses RAMWR. Follow it with
+ * esp_lcd_jd9855_draw_bitmap_continue() calls so queued DMA transfers don't
+ * need to resend CASET/RASET or wait for the previous color transaction.
+ */
+esp_err_t esp_lcd_jd9855_draw_bitmap_start(esp_lcd_panel_handle_t panel,
+                                            int x_start, int y_start,
+                                            int x_end, int y_end,
+                                            const void *color_data,
+                                            size_t color_size);
+
+/** @brief Queue another color chunk for the window opened above. */
+esp_err_t esp_lcd_jd9855_draw_bitmap_continue(esp_lcd_panel_handle_t panel,
+                                               const void *color_data,
+                                               size_t color_size);
+
+/**
  * @brief LCD panel bus configuration structure
  *
  */

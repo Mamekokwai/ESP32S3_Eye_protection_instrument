@@ -25,7 +25,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| Flash AVI 视频播放 | ✅ 正常 | 18fps, 320×320 MJPEG |
+| Flash AVI 视频播放 | 🔧 已优化待实测 | 原基线 18–20fps；40MHz i80 理论上限约 24.4fps |
 | 双屏同步 | ✅ | CS1(IO17)+CS2(IO18) 同画面 |
 | TE 帧同步 | ❌ 不可用 | JD9855 0x35 无法使能 TE, GPIO1 始终 LOW |
 | SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz, SD 卡未插入 |
@@ -54,7 +54,15 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 
 ### 4. 播放器非阻塞状态机
 
-`flash_player_tick()` 从阻塞式 `for+while+vTaskDelay` 改为每次调用只发一条带 (40行×25KB), 返回 BUSY/OK。不影响其他 workspace。
+`flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；每次最多提交一条 40行×25KB 条带。
+
+### 5. 传输与运行速度优化
+
+- 固件使用 ESP-IDF Performance (`-O2`) 编译，关闭逐帧性能日志和 JPEG 像素转储
+- 修复帧率等待期间重复消费解码信号、重复提交下一帧的问题
+- 两个内部 SRAM DMA 条带缓冲交替使用，PSRAM 仍只保存完整帧
+- 首条发送 `RAMWR` 并设置整帧窗口，后续条带用 `RAMWRC` 连续写，避免每条重发 CASET/RASET 和同步等待
+- 每 100 帧打印一次轻量 `perf` 日志，用于实机对比
 
 ## 文件结构
 
@@ -96,6 +104,7 @@ tools/                   # 视频转换 + 烧录脚本
 | `LCD_TE_ENABLE` | spilcd.h:27 | TE 软件等待 |
 | `JD9855_TE_ENABLE` | esp_lcd_jd9855.c:23 | JD9855 TE 寄存器 (需同步 LCD_TE_ENABLE) |
 | `FP_PROF_ENABLE` | flash_player.c:28 | 每 10 帧耗时占比打印 |
+| `FP_LCD_CONTINUOUS_WRITE` | flash_player.c | `1`=RAMWRC 高吞吐；`0`=逐条带兼容模式 |
 
 ## 硬件引脚
 
@@ -142,8 +151,9 @@ Obsidian vault: `~/Documents/note/Obsidian/笔记/开发/嵌入式/项目/2026/0
 
 ## 待办 / 已知问题
 
-1. **TE 帧同步**: JD9855 0x35 寄存器未调通, 需原厂 datasheet。当前无 TE 同步, 17ms 软件最小间隔保底
-2. **音频**: SD 卡未插入, 音频播放未端到端验证
-3. **UART 指令**: VPLAY 已收到但不重启播放 (app_uart.c 处理逻辑)
-4. **PSRAM 降频测试**: 未测试 40MHz PSRAM 是否消除 DMA 问题
-5. **内部 SRAM 帧缓冲**: 未测试直接用内部 SRAM 分配 200KB 帧缓冲 (可能内存不足)
+1. **性能实测**: 烧录后确认 `perf` 日志、双屏画面和 RAMWRC 连续写兼容性
+2. **TE 帧同步**: JD9855 0x35 寄存器未调通, 需原厂 datasheet。当前无 TE 同步, 17ms 软件最小间隔保底
+3. **音频**: SD 卡未插入, 音频播放未端到端验证
+4. **UART 指令**: VPLAY 已收到但不重启播放 (app_uart.c 处理逻辑)
+5. **PSRAM 降频测试**: 未测试 40MHz PSRAM 是否消除 DMA 问题
+6. **内部 SRAM 帧缓冲**: 未测试直接用内部 SRAM 分配 200KB 帧缓冲 (可能内存不足)

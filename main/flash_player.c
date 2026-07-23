@@ -10,6 +10,7 @@
 #include "avi.h"
 #include "mjpeg.h"
 #include "spilcd.h"
+#include "esp_lcd_jd9855.h"
 #include "esp_partition.h"
 #include "spi_flash_mmap.h"
 #include "esp_log.h"
@@ -23,11 +24,17 @@
 #define TAG "flash_player"
 #define FRAME_BUF_SIZE (320 * 320 * sizeof(uint16_t)) /* 320x320 RGB565 */
 #define MAX_JPEG_SIZE (48 * 1024)
+#define FP_STRIP_H 40
+#define FP_STRIP_BYTES (FP_STRIP_H * 320 * sizeof(uint16_t))
+#define FP_STRIP_BUFS 2
 #define PROF_EVERY 10
-#define FP_PROF_ENABLE 1   /* 性能分析: 1=每10帧打印耗时占比, 0=关闭 */
+#define FP_STATS_EVERY 100
+#define FP_LCD_CONTINUOUS_WRITE 1 /* 1=RAMWR+RAMWRC 流水线, 0=逐条带兼容模式 */
+#define FP_PROF_ENABLE 0   /* 性能分析: 1=每10帧打印耗时占比, 0=关闭 */
 
 extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
+extern volatile uint32_t refresh_done_count;
 
 /* ---- 内存映射文件读取器 ---- */
 typedef struct
@@ -72,11 +79,13 @@ static bool read_chunk_mmap(mmap_file_t *mf, AVI_INFO *avi,
 
         if (memcmp(fhdr, avi->VideoFLAG, 4) == 0)
         {
-            if (sz <= MAX_JPEG_SIZE)
+            if (sz > MAX_JPEG_SIZE)
             {
-                memcpy(jpeg_out, mf->data + mf->pos, sz);
-                *jpeg_sz_out = sz;
+                mf->pos += sz + (sz & 1);
+                continue;
             }
+            memcpy(jpeg_out, mf->data + mf->pos, sz);
+            *jpeg_sz_out = sz;
             mf->pos += sz;
             if (sz & 1)
                 mf->pos++;
@@ -109,6 +118,9 @@ typedef struct
 static QueueHandle_t s_q = NULL;
 static SemaphoreHandle_t s_done = NULL;
 static TaskHandle_t s_task = NULL;
+static esp_err_t s_decode_result = ESP_OK;
+static uint32_t s_decode_width = 0;
+static uint32_t s_decode_height = 0;
 
 static void decode_task(void *arg)
 {
@@ -119,9 +131,9 @@ static void decode_task(void *arg)
         {
             if (!job.jpeg_data)
                 break;
-            uint32_t w, h;
-            job.result = mjpeg_decoder_decode(job.jpeg_data, job.jpeg_size,
-                                              job.out_buf, FRAME_BUF_SIZE, &w, &h);
+            s_decode_result = mjpeg_decoder_decode(job.jpeg_data, job.jpeg_size,
+                                                   job.out_buf, FRAME_BUF_SIZE,
+                                                   &s_decode_width, &s_decode_height);
             xSemaphoreGive(s_done);
         }
     }
@@ -153,9 +165,13 @@ typedef struct
     uint16_t *frame_buf[2];
     uint8_t *jpeg_buf[2];
     size_t jpeg_size[2];
+    uint16_t *strip_buf[FP_STRIP_BUFS];
+    uint8_t strip_buf_count;
 
-    int cur, next, pending;
+    int cur, next;
     bool have_next;
+    bool frame_decoded;
+    bool next_queued;
 
     uint16_t offx, offy;
     int64_t next_ts;
@@ -163,10 +179,13 @@ typedef struct
 
     uint32_t frame_count;
     int64_t start_ts;
+    int64_t stats_ts;
     int wraps;
 
     /* 非阻塞条带发送状态机 */
     int16_t strip_ys;      /* -1=帧间等待, 0..height=条带发送中 */
+    uint16_t strip_submitted;
+    uint32_t lcd_done_base;
     int64_t last_write_ts; /* 上次 LCD 写入开始时间 (17ms 最小间隔) */
 } fp_ctx_t;
 
@@ -197,6 +216,8 @@ esp_err_t flash_player_init(void)
         ESP_LOGE(TAG, "mmap failed: %d", ret);
         return ret;
     }
+    /* 从这里开始 fail 路径可统一释放 mmap、解码器、任务和缓冲。 */
+    g_fp.initialized = true;
     ESP_LOGI(TAG, "Flash mapped: %lu bytes at %p",
              (unsigned long)g_fp.part->size, g_fp.flash_ptr);
 
@@ -205,20 +226,27 @@ esp_err_t flash_player_init(void)
     if (ar != AVI_OK)
     {
         ESP_LOGE(TAG, "AVI init failed: %d", ar);
-        spi_flash_munmap(g_fp.mmap_handle);
-        return ESP_FAIL;
+        ret = ESP_FAIL;
+        goto fail;
     }
     if (g_fp.avi.Width > 320 || g_fp.avi.Height > 320)
     {
-        spi_flash_munmap(g_fp.mmap_handle);
-        return ESP_ERR_NOT_SUPPORTED;
+        ret = ESP_ERR_NOT_SUPPORTED;
+        goto fail;
     }
 
     /* 3. 初始化流水线 */
-    mjpeg_decoder_init(g_fp.avi.Width, g_fp.avi.Height);
-    s_q = xQueueCreate(2, sizeof(decode_job_t));
+    ret = mjpeg_decoder_init(g_fp.avi.Width, g_fp.avi.Height);
+    if (ret != ESP_OK)
+        goto fail;
+    s_q = xQueueCreate(1, sizeof(decode_job_t));
     s_done = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(decode_task, "jpeg_f", 4096, NULL, 5, &s_task, 1);
+    if (!s_q || !s_done ||
+        xTaskCreatePinnedToCore(decode_task, "jpeg_f", 4096, NULL, 5, &s_task, 1) != pdPASS)
+    {
+        ret = ESP_ERR_NO_MEM;
+        goto fail;
+    }
 
     for (int i = 0; i < 2; i++)
     {
@@ -230,6 +258,21 @@ esp_err_t flash_player_init(void)
             goto fail;
         }
     }
+    for (int i = 0; i < FP_STRIP_BUFS; i++)
+    {
+        g_fp.strip_buf[i] = heap_caps_aligned_alloc(
+            64, FP_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (!g_fp.strip_buf[i])
+            break;
+        g_fp.strip_buf_count++;
+    }
+    if (g_fp.strip_buf_count == 0)
+    {
+        ret = ESP_ERR_NO_MEM;
+        goto fail;
+    }
+    if (g_fp.strip_buf_count < FP_STRIP_BUFS)
+        ESP_LOGW(TAG, "Only one SRAM strip buffer; DMA overlap disabled");
 
     /* 4. 设置 mmap 读取器并跳到 movi */
     g_fp.mf.data = g_fp.flash_ptr;
@@ -247,21 +290,26 @@ esp_err_t flash_player_init(void)
     }
 
     decode_job_t job0 = {g_fp.jpeg_buf[0], g_fp.jpeg_size[0], g_fp.frame_buf[0], ESP_OK};
-    xQueueSend(s_q, &job0, 0);
+    if (xQueueSend(s_q, &job0, 0) != pdTRUE)
+    {
+        ret = ESP_FAIL;
+        goto fail;
+    }
 
     g_fp.offx = (320 - g_fp.avi.Width) / 2;
     g_fp.offy = (320 - g_fp.avi.Height) / 2; /* 320x320 圆屏 */
     g_fp.first_vf = true;
     g_fp.have_next = true;
-    g_fp.pending = 1;
+    g_fp.frame_decoded = false;
+    g_fp.next_queued = false;
     g_fp.cur = 0;
     g_fp.next = 1;
     g_fp.strip_ys = -1; /* 帧间等待状态 */
     g_fp.last_write_ts = 0;
     g_fp.start_ts = esp_timer_get_time();
+    g_fp.stats_ts = g_fp.start_ts;
     g_fp.next_ts = g_fp.start_ts + g_fp.avi.SecPerFrame;
-    g_fp.initialized = true;
-
+    refresh_done_flag = 1; /* 初始化阶段没有播放器 DMA，允许首帧立即启动。 */
     ESP_LOGI(TAG, "Init OK: %lux%lu, %lu us/frame",
              g_fp.avi.Width, g_fp.avi.Height, g_fp.avi.SecPerFrame);
     return ESP_OK;
@@ -276,61 +324,70 @@ player_ret_t flash_player_tick(void)
     if (!g_fp.initialized)
         return PLAYER_ERROR;
 
-    static int64_t t_dec, t_read, t_lcd, t_te, t_ctl;
-    int64_t t0, now;
-
-#define FP_STRIP_H 40
-    static uint16_t *strip_buf = NULL;
-    if (!strip_buf)
-    {
-        strip_buf = heap_caps_malloc(FP_STRIP_H * 320 * sizeof(uint16_t),
-                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
 #if FP_PROF_ENABLE
-        ESP_LOGI(TAG, "strip buf %s", strip_buf ? "OK (internal DMA)" : "FAIL");
+    static int64_t t_dec, t_read, t_lcd, t_te, t_ctl;
+    int64_t t0;
 #endif
-        if (!strip_buf)
-            return PLAYER_ERROR;
-    }
-
-    now = esp_timer_get_time();
 
     /* === 帧间等待状态: 检查所有前置条件 === */
     if (g_fp.strip_ys < 0)
     {
         /* Step A: 非阻塞检查解码完成 */
-        t0 = now;
-        if (xSemaphoreTake(s_done, 0) != pdTRUE)
-            return PLAYER_BUSY;
-        g_fp.pending--;
-        t_dec += esp_timer_get_time() - t0;
-
-        /* Step B: 提交下一帧解码 */
-        if (g_fp.have_next)
+#if FP_PROF_ENABLE
+        t0 = esp_timer_get_time();
+#endif
+        if (!g_fp.frame_decoded)
         {
+            if (xSemaphoreTake(s_done, 0) != pdTRUE)
+                return PLAYER_BUSY;
+            if (s_decode_result != ESP_OK ||
+                s_decode_width != g_fp.avi.Width || s_decode_height != g_fp.avi.Height)
+            {
+                ESP_LOGE(TAG, "decode failed: err=%d size=%lux%lu", s_decode_result,
+                         (unsigned long)s_decode_width, (unsigned long)s_decode_height);
+                return PLAYER_ERROR;
+            }
+            g_fp.frame_decoded = true;
+        }
+#if FP_PROF_ENABLE
+        t_dec += esp_timer_get_time() - t0;
+#endif
+
+        /* Step B/C 只推进一次: 提交下一帧解码, 再复用已释放的 JPEG 缓冲预读 */
+        if (!g_fp.next_queued)
+        {
+            if (!g_fp.have_next)
+                return PLAYER_ERROR;
             decode_job_t job = {
                 g_fp.jpeg_buf[g_fp.next], g_fp.jpeg_size[g_fp.next],
                 g_fp.frame_buf[g_fp.next], ESP_OK};
-            xQueueSend(s_q, &job, 0);
-            g_fp.pending++;
-        }
+            if (xQueueSend(s_q, &job, 0) != pdTRUE)
+                return PLAYER_BUSY;
 
-        /* Step C: 预读下一帧 */
+#if FP_PROF_ENABLE
         t0 = esp_timer_get_time();
-        g_fp.have_next = read_chunk_mmap(&g_fp.mf, &g_fp.avi,
-                                         g_fp.jpeg_buf[g_fp.cur],
-                                         &g_fp.jpeg_size[g_fp.cur]);
-        if (!g_fp.have_next)
-        {
-            mmap_seek(&g_fp.mf, g_fp.movi_pos);
+#endif
             g_fp.have_next = read_chunk_mmap(&g_fp.mf, &g_fp.avi,
                                              g_fp.jpeg_buf[g_fp.cur],
                                              &g_fp.jpeg_size[g_fp.cur]);
-            g_fp.wraps++;
+            if (!g_fp.have_next)
+            {
+                mmap_seek(&g_fp.mf, g_fp.movi_pos);
+                g_fp.have_next = read_chunk_mmap(&g_fp.mf, &g_fp.avi,
+                                                 g_fp.jpeg_buf[g_fp.cur],
+                                                 &g_fp.jpeg_size[g_fp.cur]);
+                g_fp.wraps++;
+            }
+#if FP_PROF_ENABLE
+            t_read += esp_timer_get_time() - t0;
+#endif
+            g_fp.next_queued = true;
         }
-        t_read += esp_timer_get_time() - t0;
 
         /* Step D: 非阻塞帧率控制 (按视频帧率) */
+#if FP_PROF_ENABLE
         t0 = esp_timer_get_time();
+#endif
         if (!g_fp.first_vf)
         {
             if (esp_timer_get_time() < g_fp.next_ts)
@@ -342,52 +399,72 @@ player_ret_t flash_player_tick(void)
             g_fp.first_vf = false;
             g_fp.next_ts = esp_timer_get_time() + g_fp.avi.SecPerFrame;
         }
+#if FP_PROF_ENABLE
         t_ctl += esp_timer_get_time() - t0;
+#endif
 
         /* Step E: LCD 空闲检查 */
         if (!lcd_is_ready())
             return PLAYER_BUSY;
 
         /* Step E2: 帧同步 — 距上次写入最小 17ms (60Hz 对齐) + TE 硬件 */
+#if FP_PROF_ENABLE
         t0 = esp_timer_get_time();
+#endif
         if (g_fp.last_write_ts != 0)
         {
             if (esp_timer_get_time() < g_fp.last_write_ts + 17000)
             {
+#if FP_PROF_ENABLE
                 t_te += esp_timer_get_time() - t0;
+#endif
                 return PLAYER_BUSY;
             }
         }
         spilcd_wait_te(); /* 硬件 TE (LCD_TE_ENABLE=1 时等待脉冲) */
+#if FP_PROF_ENABLE
         t_te += esp_timer_get_time() - t0;
+#endif
 
         /* 所有前置条件满足, 开始发送条带 */
         g_fp.strip_ys = 0;
+        g_fp.strip_submitted = 0;
+        g_fp.lcd_done_base = refresh_done_count;
+        refresh_done_flag = 0;
         g_fp.last_write_ts = esp_timer_get_time();
-        /* refresh_done_flag 由上一帧最后一条带或 lcd_is_ready 置位, 直接可用 */
     }
 
-    /* === 条带发送状态机: 每次调用发一条, 不阻塞 === */
-
-    /* Step F: 等上一次 DMA 完成 (第一条带无需等) */
+    /* === 双 SRAM 条带流水线: CPU memcpy 与上一条 DMA 重叠 === */
+#if FP_PROF_ENABLE
     t0 = esp_timer_get_time();
-    if (g_fp.strip_ys > 0 && !refresh_done_flag)
-    {
-        t_lcd += esp_timer_get_time() - t0;
-        return PLAYER_BUSY;
-    }
+#endif
 
     int ys = g_fp.strip_ys;
+    uint32_t completed = refresh_done_count - g_fp.lcd_done_base;
+    if (completed > g_fp.strip_submitted)
+        completed = g_fp.strip_submitted;
 
-    /* 所有条带发完? (不消费 refresh_done_flag — 留给下一帧 Step E) */
+    /* 所有条带已提交且 DMA 全部完成后才交换帧缓冲 */
     if (ys >= (int)g_fp.avi.Height)
     {
+        if (completed < g_fp.strip_submitted)
+            return PLAYER_BUSY;
         g_fp.strip_ys = -1; /* 回到帧间等待状态 */
         g_fp.frame_count++;
+        if (g_fp.frame_count % FP_STATS_EVERY == 0)
+        {
+            int64_t stats_now = esp_timer_get_time();
+            float fps = FP_STATS_EVERY * 1000000.0f / (stats_now - g_fp.stats_ts);
+            ESP_LOGI(TAG, "perf: %.1f fps, frames=%lu, wraps=%d", fps,
+                     (unsigned long)g_fp.frame_count, g_fp.wraps);
+            g_fp.stats_ts = stats_now;
+        }
 #if FP_PROF_ENABLE
         ESP_LOGI(TAG, "frame %lu done", (unsigned long)g_fp.frame_count);
 #endif
+#if FP_PROF_ENABLE
         t_lcd += esp_timer_get_time() - t0;
+#endif
 
 #if FP_PROF_ENABLE
         if (g_fp.frame_count % PROF_EVERY == 0)
@@ -410,28 +487,59 @@ player_ret_t flash_player_tick(void)
 
         g_fp.cur = g_fp.next;
         g_fp.next = 1 - g_fp.next;
+        g_fp.frame_decoded = false;
+        g_fp.next_queued = false;
 
         return PLAYER_OK;
     }
 
-    /* 发当前条带: PSRAM→memcpy→内部SRAM→DMA (PSRAM DMA 有数据损坏问题) */
-    refresh_done_flag = 0;
+    if (g_fp.strip_submitted - completed >= g_fp.strip_buf_count)
+        return PLAYER_BUSY;
+
+    /* PSRAM→memcpy→内部 SRAM→DMA；双缓冲避免 DMA 等待下一次 memcpy */
     {
         int h = (ys + FP_STRIP_H > (int)g_fp.avi.Height)
                     ? (int)g_fp.avi.Height - ys
                     : FP_STRIP_H;
         uint16_t *fb = (uint16_t *)g_fp.frame_buf[g_fp.cur];
+        uint16_t *strip_buf = g_fp.strip_buf[g_fp.strip_submitted % g_fp.strip_buf_count];
         size_t strip_bytes = h * g_fp.avi.Width * sizeof(uint16_t);
         memcpy(strip_buf, fb + ys * g_fp.avi.Width, strip_bytes);
-        esp_lcd_panel_draw_bitmap(panel_handle,
-                                  g_fp.offx, g_fp.offy + ys,
-                                  g_fp.offx + g_fp.avi.Width,
-                                  g_fp.offy + ys + h,
-                                  strip_buf);
-        g_fp.strip_ys = ys + FP_STRIP_H;
+        esp_err_t ret;
+#if FP_LCD_CONTINUOUS_WRITE
+        if (g_fp.strip_submitted == 0)
+        {
+            ret = esp_lcd_jd9855_draw_bitmap_start(
+                panel_handle,
+                g_fp.offx, g_fp.offy,
+                g_fp.offx + g_fp.avi.Width,
+                g_fp.offy + g_fp.avi.Height,
+                strip_buf, strip_bytes);
+        }
+        else
+        {
+            ret = esp_lcd_jd9855_draw_bitmap_continue(panel_handle,
+                                                       strip_buf, strip_bytes);
+        }
+#else
+        ret = esp_lcd_panel_draw_bitmap(panel_handle,
+                                        g_fp.offx, g_fp.offy + ys,
+                                        g_fp.offx + g_fp.avi.Width,
+                                        g_fp.offy + ys + h,
+                                        strip_buf);
+#endif
+        if (ret != ESP_OK)
+        {
+            ESP_LOGE(TAG, "LCD submit failed: %d", ret);
+            return PLAYER_ERROR;
+        }
+        g_fp.strip_submitted++;
+        g_fp.strip_ys = ys + h;
     }
 
+#if FP_PROF_ENABLE
     t_lcd += esp_timer_get_time() - t0;
+#endif
     return PLAYER_BUSY; /* 还有条带要发 */
 }
 
@@ -439,6 +547,20 @@ void flash_player_stop(void)
 {
     if (!g_fp.initialized)
         return;
+
+    bool lcd_idle = true;
+    if (g_fp.strip_submitted > 0)
+    {
+        int wait = 0;
+        while (refresh_done_count - g_fp.lcd_done_base < g_fp.strip_submitted && wait < 100)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            wait++;
+        }
+        lcd_idle = refresh_done_count - g_fp.lcd_done_base >= g_fp.strip_submitted;
+        if (!lcd_idle)
+            ESP_LOGE(TAG, "LCD DMA stop timeout; preserving strip buffers");
+    }
 
     if (s_q && s_task)
     {
@@ -480,6 +602,14 @@ void flash_player_stop(void)
         {
             free(g_fp.jpeg_buf[i]);
             g_fp.jpeg_buf[i] = NULL;
+        }
+    }
+    for (int i = 0; i < FP_STRIP_BUFS; i++)
+    {
+        if (g_fp.strip_buf[i] && lcd_idle)
+        {
+            heap_caps_free(g_fp.strip_buf[i]);
+            g_fp.strip_buf[i] = NULL;
         }
     }
 

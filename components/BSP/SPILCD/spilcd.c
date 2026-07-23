@@ -22,6 +22,7 @@
 #define TAG "spilcd"
 
 volatile uint8_t refresh_done_flag = 0;
+volatile uint32_t refresh_done_count = 0;
 esp_lcd_panel_handle_t panel_handle = NULL;
 _spilcd_dev spilcddev;
 
@@ -30,6 +31,7 @@ static bool notify_lcd_flush_ready(esp_lcd_panel_io_handle_t io,
                                    void *user_ctx)
 {
     refresh_done_flag = 1;
+    refresh_done_count++;
     return false;
 }
 
@@ -90,7 +92,7 @@ esp_err_t spilcd_init(void)
     esp_lcd_panel_io_i80_config_t io_cfg = {
         .cs_gpio_num = LCD_CS,
         .pclk_hz = 40 * 1000 * 1000, /* 40MHz 写时钟 <50MHZ */
-        .trans_queue_depth = 7,
+        .trans_queue_depth = 2, /* 与双 SRAM 条带缓冲匹配 */
         .on_color_trans_done = notify_lcd_flush_ready,
         .dc_levels = {
             .dc_idle_level = 0,
@@ -157,52 +159,52 @@ void spilcd_display_dir(uint8_t dir)
 
 void spilcd_clear(uint16_t color)
 {
-    uint16_t *buf = heap_caps_malloc(spilcddev.width * 40 * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (!buf)
-        return;
-    for (int i = 0; i < spilcddev.width * 40; i++)
-        buf[i] = color;
-    for (int y = 0; y < spilcddev.height; y += 40)
-    {
-        refresh_done_flag = 0;
-        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, spilcddev.width, y + 40, buf);
-        while (!refresh_done_flag)
-            vTaskDelay(1);
-    }
-    heap_caps_free(buf);
+    spilcd_fill(0, 0, spilcddev.width, spilcddev.height, color);
 }
 
 void spilcd_fill_raw(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color); /* 不做颜色修正 */
 
 void spilcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color)
 {
+    if (sx >= ex || sy >= ey || ex > spilcddev.width || ey > spilcddev.height)
+        return;
     uint16_t w = ex - sx, h = ey - sy;
-    uint16_t *buf = heap_caps_malloc(w * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
+    const uint16_t max_rows = 40;
+    uint16_t rows = h < max_rows ? h : max_rows;
+    size_t pixels = (size_t)w * rows;
+    uint16_t *buf = heap_caps_malloc(pixels * sizeof(uint16_t),
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!buf)
         return;
-    for (int i = 0; i < w; i++)
+    for (size_t i = 0; i < pixels; i++)
         buf[i] = color;
-    for (int y = 0; y < h; y++)
-        esp_lcd_panel_draw_bitmap(panel_handle, sx, sy + y, ex, sy + y + 1, buf);
+    for (uint16_t y = 0; y < h; y += rows)
+    {
+        uint16_t chunk_rows = (y + rows > h) ? h - y : rows;
+        refresh_done_flag = 0;
+        if (esp_lcd_panel_draw_bitmap(panel_handle, sx, sy + y, ex,
+                                      sy + y + chunk_rows, buf) != ESP_OK)
+            break;
+        while (!refresh_done_flag)
+            vTaskDelay(1);
+    }
     heap_caps_free(buf);
 }
 
 void spilcd_fill_raw(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color)
 {
-    uint16_t w = ex - sx, h = ey - sy;
-    uint16_t *buf = heap_caps_malloc(w * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    if (!buf)
-        return;
-    for (int i = 0; i < w; i++)
-        buf[i] = color; /* 原始颜色, 不修正 */
-    for (int y = 0; y < h; y++)
-        esp_lcd_panel_draw_bitmap(panel_handle, sx, sy + y, ex, sy + y + 1, buf);
-    heap_caps_free(buf);
+    spilcd_fill(sx, sy, ex, ey, color);
 }
 
 void spilcd_draw_point(uint16_t x, uint16_t y, uint16_t color)
 {
-    esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + 1, y + 1, &color);
+    if (x >= spilcddev.width || y >= spilcddev.height)
+        return;
+    refresh_done_flag = 0;
+    if (esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + 1, y + 1, &color) != ESP_OK)
+        return;
+    while (!refresh_done_flag)
+        vTaskDelay(1);
 }
 
 /* 以下函数和旧版相同, 只保留接口兼容性 */
@@ -378,9 +380,11 @@ void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
 }
 
 /* ---- TE 帧同步: 等待 LCD 垂直消隐, 抢先写入 ---- */
-/* ---- TE 帧同步: 等待 LCD 垂直消隐, 抢先写入 ---- */
 void spilcd_wait_te(void)
 {
+#if !LCD_TE_ENABLE
+    return;
+#else
     static bool first = true;
     int64_t t0 = esp_timer_get_time();
     if (first)
@@ -405,9 +409,6 @@ void spilcd_wait_te(void)
                  (gpio_get_level(LCD_TE) == 1) ? "OK=HIGH" : "LOW=maybe open-drain w/o ext pull-up");
         first = false;
     }
-#if !LCD_TE_ENABLE
-    return; /* TE 关闭，立即返回 (延迟由上层 flash_player 智能计算) */
-#endif
     /* TE=1 = V-blank (可写入), TE=0 = 扫描中.
      * 等 TE 拉高 → V-blank 期间抢先写顶部, 扫描线在后面追.
      * 先等 TE=0 (确保不在 blank 内), 再等 TE=1 (blank 开始). */
@@ -417,4 +418,5 @@ void spilcd_wait_te(void)
     while (gpio_get_level(LCD_TE) == 0) {
         if (esp_timer_get_time() - t0 > 50000) return;
     }
+#endif
 }

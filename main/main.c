@@ -302,6 +302,11 @@ void app_main(void)
         xSemaphoreTake(s_tick_sem, portMAX_DELAY);  /* 阻塞等 1ms tick, 让出 CPU 给 idle */
         if (++ws >= WS_NUM)
             ws = 0;
+
+        /* LCD 每条 40 行 DMA 约 5.1ms；视频每 1ms 检查一次可及时续传，
+         * 音频仍保留在 5ms workspace 中，避免改变其阻塞写入节奏。 */
+        if (g_mode == MODE_VIDEO_PLAYING)
+            player_tick();
         // 颜色测试
         //  if (++test1 >= 1000)
         //  {
@@ -326,7 +331,8 @@ void app_main(void)
             state_tick();
             break;
         case WS_PLAYER_TICK:
-            player_tick();
+            if (g_mode != MODE_VIDEO_PLAYING)
+                player_tick();
             break;
         case WS_SYSTEM_MON:
             monitor_tick();

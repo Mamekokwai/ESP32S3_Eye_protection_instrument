@@ -40,6 +40,7 @@ typedef struct {
 extern _spilcd_dev spilcddev;
 extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
+extern volatile uint32_t refresh_done_count;
 
 esp_err_t spilcd_init(void);
 void spilcd_display_dir(uint8_t dir);
