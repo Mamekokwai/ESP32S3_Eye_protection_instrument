@@ -17,7 +17,6 @@
 #include "my_spi.h"
 #include "spilcd.h"
 #include "spi_sd.h"
-#include "key.h"
 #include "flash_player.h"
 #include "audio_player.h"
 #include "app_uart.h"
@@ -122,7 +121,7 @@ typedef enum
     WS_APP_STATE = 1,
     WS_PLAYER_TICK = 2,
     WS_SYSTEM_MON = 3,
-    WS_KEY_SCAN = 4,
+    WS_RESERVED = 4,
     WS_NUM
 } workspace_t;
 
@@ -137,55 +136,6 @@ typedef enum
 } app_mode_t;
 
 app_mode_t g_mode = MODE_IDLE;
-
-/* ---- BOOT 按键 (仅长按 2s → DL) ---- */
-static uint16_t g_key_hold = 0;
-#define LONG_PRESS_TICKS ((2000 * 1000) / 5000)
-
-// static adc_oneshot_unit_handle_t s_adc1 = NULL;  /* DEBUG: GPIO0 ADC */
-
-static void key_tick(void)
-{
-#if 0  /* ---- DEBUG: GPIO0 ADC 电压检测, 暂时关闭 ---- */
-    static bool adc_inited = false;
-    if (!adc_inited) {
-        adc_oneshot_unit_init_cfg_t init_cfg = { .unit_id = ADC_UNIT_1 };
-        adc_oneshot_new_unit(&init_cfg, &s_adc1);
-        adc_oneshot_chan_cfg_t ch_cfg = {
-            .atten = ADC_ATTEN_DB_11,
-            .bitwidth = ADC_BITWIDTH_12,
-        };
-        adc_oneshot_config_channel(s_adc1, ADC_CHANNEL_0, &ch_cfg);
-        adc_inited = true;
-    }
-    static int last_mv = -1;
-    int raw, mv = 0;
-    adc_oneshot_read(s_adc1, ADC_CHANNEL_0, &raw);
-    mv = raw * 3100 / 4095;
-    if (abs(mv - last_mv) > 50) {
-        ESP_LOGI(TAG, "DEBUG GPIO0=%dmV", mv);
-        last_mv = mv;
-    }
-#endif /* ---- DEBUG END ---- */
-
-    if (key_scan(0) == BOOT_PRES)
-    {
-        if (g_key_hold == 0)
-            app_uart_send("KEY BOOT");
-        if (++g_key_hold > LONG_PRESS_TICKS)
-        {
-            extern void reboot_to_download(void);
-            ESP_LOGI(TAG, "BOOT long press -> DL");
-            reboot_to_download();
-        }
-    }
-    else
-    {
-        if (g_key_hold > 0)
-            app_uart_send("KEY BOOT UP");
-        g_key_hold = 0;
-    }
-}
 
 /* ---- 状态机 (占位, 状态切换由 UART 指令驱动) ---- */
 static void state_tick(void) {}
@@ -270,7 +220,6 @@ void app_main(void)
         }
     }
 
-    key_init();
     // gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
     // gpio_config(&lc);
     gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT); // LED 改用 IO2
@@ -337,8 +286,7 @@ void app_main(void)
         case WS_SYSTEM_MON:
             monitor_tick();
             break;
-        case WS_KEY_SCAN:
-            key_tick();
+        case WS_RESERVED:
             break;
         }
     }

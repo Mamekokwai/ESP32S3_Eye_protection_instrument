@@ -85,7 +85,7 @@ components/BSP/
 ├── SPI_SD/spi_sd.c/h   # TF 卡 SPI/SDMMC
 ├── MYSPI/my_spi.c/h    # SPI 总线
 ├── MYIIC/my_iic.c/h    # I2C (ES8311)
-├── KEY/key.c/h         # BOOT 按键 (IO0)
+├── KEY/key.c/h         # 旧 BOOT 按键代码，已停止编译
 ├── LED/led.c/h         # LED 心跳 (IO2)
 └── XL9555/             # 旧板遗留, 未使用
 
@@ -137,6 +137,7 @@ tools/                   # 视频转换 + 烧录脚本
 | VPLAY / VSTOP / VPAUSE / VRESUME | 视频控制 |
 | APLAY N / APLAY fname | 音频播放 |
 | ALIST / ASTOP / AMUTE | 音频列表/停止/静音 |
+| SDLIST [page] | 屏幕分页显示 TF 卡根目录 |
 | VOL 0-100 | 音量 |
 | STATUS / INFO | 查询状态/系统信息 |
 | SLEEP / WAKE | 休眠/唤醒 |

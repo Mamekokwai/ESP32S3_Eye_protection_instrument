@@ -91,7 +91,7 @@ components/BSP/
 ├── SPI_SD/             # TF 卡 (SPI/SDMMC 宏切换)
 ├── MYSPI/              # SPI 总线 (仅 SD 卡)
 ├── MYIIC/              # I2C (仅 ES8311)
-├── KEY/                # GPIO 按键 (BOOT=IO0)
+├── KEY/                # 旧 BOOT 按键代码，已停止编译，IO0 留给 SD CS
 ├── LED/                # GPIO LED (IO1, 心跳指示)
 ├── XL9555/             # I2C GPIO扩展 (旧板遗留, 仅编译未使用)
 
@@ -108,7 +108,7 @@ components/esp_lcd_jd9855/
 | 1 | 应用状态机 | 5ms |
 | 2 | 音频播放器 tick；视频另走 1ms 快速服务 | 音频5ms / 视频1ms |
 | 3 | 系统监控 (LED心跳/堆日志) | 5ms |
-| 4 | BOOT 按键 (仅长按→DL) | 5ms |
+| 4 | 保留空闲槽位 | 5ms |
 
 ### 应用状态机
 
@@ -149,6 +149,7 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | `VSTOP` | 停止视频, 回空闲 | `OK VSTOP` |
 | `APLAY <N/fname>` | 播放 SD 卡第 N 个或指定 PCM 文件 | `OK APLAY` |
 | `ALIST` | 列出 SD 卡中 .pcm 文件 | `ALIST` + 文件列表 |
+| `SDLIST [page]` | 在屏幕分页显示 TF 卡根目录 | `OK SDLIST page=1/2 items=15` |
 | `ASTOP` | 停止音频 | `OK ASTOP` |
 | `AMUTE` | 静音切换 | `OK AMUTE on/off` |
 | `VOL <0-100>` | 设置音量 | `OK VOL 80` |
@@ -160,6 +161,7 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | `WAKE` | 唤醒 | `OK WAKE` |
 
 ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
+`SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时会停止当前音视频播放。
 
 ## 播放器类型
 
@@ -216,7 +218,7 @@ reboot_to_download();  // 立即复位到烧录模式
 ROM bootloader 检测到后进入下载模式。
 
 注意: ESP32-S3 只有 GPIO 0-21 是 RTC GPIO, IO46 不是, 已从代码中移除。
-开机检测 GPIO0 长按的代码已注释掉 (硬件问题: GPIO0 被 R57 0Ω 拉低, 需拆掉)。
+GPIO0 运行时作为 TF 卡 CS，BOOT 按键初始化和扫描代码已移除。
 
 ## 注意事项
 

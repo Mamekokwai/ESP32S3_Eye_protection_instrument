@@ -7,14 +7,16 @@
  * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
  *
  * 指令: VPLAY / VPAUSE / VRESUME / VSTOP
- *       APLAY / ALIST / ASTOP / AMUTE / VOL
+ *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST
  *       DL / RST / STATUS / INFO / SLEEP / WAKE
  */
 
 #include "app_uart.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <limits.h>
 // #include <fcntl.h>    /* TODO: USB-serial-JTAG stdin */
 // #include <errno.h>
 // #include <unistd.h>
@@ -26,6 +28,7 @@
 #include "spilcd.h"
 #include "flash_player.h"
 #include "audio_player.h"
+#include "sd_browser.h"
 #include "reset_to_dl.h"
 
 #define TAG "uart"
@@ -123,6 +126,52 @@ static void cmd_handle(const char *cmd)
         }
         else
             uart_send_str("ERR no video");
+        return;
+    }
+
+    /* === TF 卡目录 === */
+    if (strcasecmp(cmd, "SDLIST") == 0 || strncasecmp(cmd, "SDLIST ", 7) == 0)
+    {
+        int requested_page = 1;
+        if (cmd[6] != '\0')
+        {
+            const char *argument = cmd + 7;
+            char *end = NULL;
+            long parsed_page = strtol(argument, &end, 10);
+            while (end && *end == ' ')
+                end++;
+            if (argument == end || (end && *end != '\0') || parsed_page < 1 || parsed_page > INT_MAX)
+            {
+                uart_send_str("ERR usage: SDLIST [page]");
+                return;
+            }
+            requested_page = (int)parsed_page;
+        }
+
+        if (g_mode == MODE_VIDEO_PLAYING || g_mode == MODE_VIDEO_PAUSED)
+            flash_player_stop();
+        if (g_mode == MODE_AUDIO_PLAYING)
+            audio_player_stop();
+        g_mode = MODE_IDLE;
+
+        int shown_page = 1;
+        int page_count = 1;
+        int entry_count = 0;
+        esp_err_t ret = sd_browser_show_page(requested_page, &shown_page,
+                                             &page_count, &entry_count);
+        if (ret == ESP_OK)
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "OK SDLIST page=%d/%d items=%d",
+                     shown_page, page_count, entry_count);
+            uart_send_str(response);
+        }
+        else
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "ERR SDLIST %s", esp_err_to_name(ret));
+            uart_send_str(response);
+        }
         return;
     }
 

@@ -1,5 +1,4 @@
 set(src_dirs    
-            KEY
             LED
             MYSPI
             SPI_SD
@@ -8,7 +7,6 @@ set(src_dirs
             XL9555)
 
 set(include_dirs
-            KEY
             LED
             MYSPI
             SPI_SD

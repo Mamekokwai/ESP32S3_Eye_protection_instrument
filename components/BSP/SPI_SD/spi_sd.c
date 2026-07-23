@@ -88,6 +88,11 @@ esp_err_t sd_spi_init(void)
     return ret;
 }
 
+bool sd_spi_is_mounted(void)
+{
+    return mount_ret == ESP_OK && card != NULL;
+}
+
 /**
  * @brief       获取SD卡相关信息
  * @param       out_total_bytes：总大小

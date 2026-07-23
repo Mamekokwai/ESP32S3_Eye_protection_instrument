@@ -8,12 +8,14 @@
 #include "esp_lcd_io_i80.h"
 #include "esp_lcd_panel_ops.h"
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_jd9855.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 
 #define LCD_CS2 GPIO_NUM_18 /* 右眼屏片选 (和 CS1=IO17 配合) */
@@ -377,6 +379,52 @@ void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
         x += size / 2;
         p++;
     }
+}
+
+esp_err_t spilcd_show_text16(uint16_t x, uint16_t y, const char *text,
+                             uint16_t foreground, uint16_t background)
+{
+    if (!text || x >= spilcddev.width || y + 16 > spilcddev.height)
+        return ESP_ERR_INVALID_ARG;
+
+    size_t max_chars = (spilcddev.width - x) / 8;
+    size_t char_count = strnlen(text, max_chars);
+    if (char_count == 0)
+        return ESP_OK;
+
+    size_t width = char_count * 8;
+    size_t pixel_count = width * 16;
+    uint16_t *buffer = heap_caps_malloc(pixel_count * sizeof(uint16_t),
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!buffer)
+        return ESP_ERR_NO_MEM;
+
+    for (size_t row = 0; row < 16; row++)
+    {
+        for (size_t index = 0; index < char_count; index++)
+        {
+            uint8_t character = (uint8_t)text[index];
+            if (character < 32 || character > 126)
+                character = '?';
+            uint8_t bits = asc2_1608[character - 32][row];
+            for (size_t column = 0; column < 8; column++)
+            {
+                buffer[row * width + index * 8 + column] =
+                    (bits & (0x80U >> column)) ? foreground : background;
+            }
+        }
+    }
+
+    refresh_done_flag = 0;
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(panel_handle, x, y,
+                                               x + width, y + 16, buffer);
+    if (ret == ESP_OK)
+    {
+        while (!refresh_done_flag)
+            vTaskDelay(1);
+    }
+    heap_caps_free(buffer);
+    return ret;
 }
 
 /* ---- TE 帧同步: 等待 LCD 垂直消隐, 抢先写入 ---- */

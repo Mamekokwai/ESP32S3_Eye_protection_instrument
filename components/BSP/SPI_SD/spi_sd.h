@@ -8,6 +8,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "my_spi.h"
+#include <stdbool.h>
 
 /* ============================================================
  *  TF 卡协议选择
@@ -31,5 +32,6 @@
 
 /* 函数声明 */
 esp_err_t sd_spi_init(void); /* SD卡初始化 (兼容旧名称) */
+bool sd_spi_is_mounted(void);
 void sd_get_fatfs_usage(size_t *out_total_bytes, size_t *out_free_bytes);
 #endif
