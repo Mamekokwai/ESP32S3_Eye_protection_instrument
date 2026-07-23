@@ -153,7 +153,7 @@ esp_err_t spilcd_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    spilcd_display_dir(1);
+    spilcd_display_dir(2); // 屏幕朝向(0,1,2,3) 0=默认, 1=旋转90度, 2=旋转180度, 3=旋转270度
     spilcd_clear(BLACK);
 
     ESP_LOGI(TAG, "LCD JD9855 i80 init OK (320x320)");
@@ -162,20 +162,34 @@ esp_err_t spilcd_init(void)
 
 void spilcd_display_dir(uint8_t dir)
 {
+    dir &= 3;
     spilcddev.dir = dir;
-    if (dir == 0)
-    {
+    /* 统一使用标准 MADCTL 组合，避免 VID/IMG 分条窗口在旋转时错位。 */
+    switch (dir) {
+    case 0: /* 默认 */
         spilcddev.width = spilcddev.pheight;
         spilcddev.height = spilcddev.pwidth;
         esp_lcd_panel_swap_xy(panel_handle, false);
         esp_lcd_panel_mirror(panel_handle, false, false);
-    }
-    else
-    {
+        break;
+    case 1: /* 旋转 90° */
         spilcddev.width = spilcddev.pwidth;
         spilcddev.height = spilcddev.pheight;
         esp_lcd_panel_swap_xy(panel_handle, true);
         esp_lcd_panel_mirror(panel_handle, true, false);
+        break;
+    case 2: /* 旋转 180° */
+        spilcddev.width = spilcddev.pheight;
+        spilcddev.height = spilcddev.pwidth;
+        esp_lcd_panel_swap_xy(panel_handle, false);
+        esp_lcd_panel_mirror(panel_handle, true, true);
+        break;
+    case 3: /* 旋转 270° */
+        spilcddev.width = spilcddev.pwidth;
+        spilcddev.height = spilcddev.pheight;
+        esp_lcd_panel_swap_xy(panel_handle, true);
+        esp_lcd_panel_mirror(panel_handle, false, true);
+        break;
     }
 }
 

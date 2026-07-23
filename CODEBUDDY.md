@@ -153,7 +153,8 @@ tools/                   # 视频转换 + 烧录脚本
 | DL / RST | 烧录模式/重启 |
 
 `IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 40 行 DMA 条带。
-`VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频帧缓冲位于 PSRAM，但 LCD 只接收内部 SRAM 的 40 行 DMA 条带。
+`VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频解码固定 CPU0、音频固定 CPU1；TF 视频帧缓冲位于 PSRAM并显式同步 cache，LCD 采用与 IMG 一致的单个内部 SRAM 80 行条带逐窗口 DMA。
+TF 视频每 100 帧打印 `VID profile`，包含 SD 读取、JPEG 解码、cache 同步、PSRAM→SRAM、LCD 提交/刷新及等待阶段的耗时和窗口占比。
 
 ## 开发经验文档
 

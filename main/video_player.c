@@ -1,12 +1,12 @@
 /**
  * @brief  AVI 视频播放器 (双核流水线, tick 化)
  *
- * Core0: SPI (SD读取 + LCD发送) — 主循环每 tick 推进一步
- * Core1: JPEG 解码 (独立 FreeRTOS 任务)
+ * Core0: SD读取 + JPEG解码任务 + LCD发送
+ * Core1: 保留给独立音频任务，避免视频解码与音频争抢 CPU
  *
  * 流水线 (每次 video_player_tick() 推进一步):
- *   Step A: 非阻塞检查 Core1 解码完成 → 未完则 return BUSY
- *   Step B: 提交下一帧给 Core1 解码
+ *   Step A: 非阻塞检查 CPU0 解码任务完成 → 未完则 return BUSY
+ *   Step B: 提交下一帧给 CPU0 解码任务
  *   Step C: 预读下一帧 JPEG 数据
  *   Step D: 非阻塞帧率控制 → 未到时间则 return BUSY
  *   Step E: 非阻塞 LCD TE 同步 → LCD 忙则 return BUSY
@@ -19,7 +19,7 @@
 #include "mjpeg.h"
 #include "spilcd.h"
 #include "spi_sd.h"
-#include "esp_lcd_jd9855.h"
+#include "esp_cache.h"
 #include <dirent.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -35,46 +35,78 @@
 #include "freertos/semphr.h"
 
 /* ====== 用户配置 ====== */
-#define PROF_EVERY   100
+#define PROF_EVERY 100
 /* ===================== */
 
 #define TAG "video_player"
 
-#define DMA_BUF_SIZE   (32 * 1024)
+#define DMA_BUF_SIZE (32 * 1024)
 #define FRAME_BUF_SIZE (320 * 320 * sizeof(uint16_t))
-#define MAX_JPEG_SIZE  (96 * 1024)
-#define VP_STRIP_H     40
+#define MAX_JPEG_SIZE (96 * 1024)
+#define VP_STRIP_H 160 // 写入条带高度
 #define VP_STRIP_BYTES (VP_STRIP_H * 320 * sizeof(uint16_t))
-#define VP_STRIP_BUFS  2
+#define VP_STRIP_BUFS 1
 
 extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
 extern volatile uint32_t refresh_done_count;
 
 /* ---- 双核流水线 ---- */
-typedef struct {
+typedef struct
+{
     const uint8_t *jpeg_data;
-    size_t         jpeg_size;
-    uint16_t      *out_buf;
-    esp_err_t      result;
+    size_t jpeg_size;
+    uint16_t *out_buf;
+    esp_err_t result;
 } decode_job_t;
 
-static QueueHandle_t     s_decode_q    = NULL;
+static QueueHandle_t s_decode_q = NULL;
 static SemaphoreHandle_t s_decode_done = NULL;
-static TaskHandle_t      s_decode_task = NULL;
-static esp_err_t         s_decode_result = ESP_OK;
-static uint32_t          s_decode_width = 0;
-static uint32_t          s_decode_height = 0;
+static TaskHandle_t s_decode_task = NULL;
+static esp_err_t s_decode_result = ESP_OK;
+static uint32_t s_decode_width = 0;
+static uint32_t s_decode_height = 0;
+static volatile uint32_t s_decode_started = 0;
+static volatile uint32_t s_decode_completed = 0;
+static volatile int64_t s_decode_time_us = 0;
+static volatile int64_t s_decode_cache_time_us = 0;
 
 static void decode_task(void *arg)
 {
     decode_job_t job;
-    while (1) {
-        if (xQueueReceive(s_decode_q, &job, portMAX_DELAY) == pdTRUE) {
-            if (job.jpeg_data == NULL) break;
+    while (1)
+    {
+        if (xQueueReceive(s_decode_q, &job, portMAX_DELAY) == pdTRUE)
+        {
+            if (job.jpeg_data == NULL)
+                break;
+            s_decode_started++;
+            if (s_decode_started == 1)
+                ESP_LOGI(TAG, "First JPEG decode started on CPU%d",
+                         xPortGetCoreID());
+            int64_t decode_started_at = esp_timer_get_time();
             s_decode_result = mjpeg_decoder_decode(
                 job.jpeg_data, job.jpeg_size, job.out_buf, FRAME_BUF_SIZE,
                 &s_decode_width, &s_decode_height);
+            s_decode_time_us += esp_timer_get_time() - decode_started_at;
+            if (s_decode_result == ESP_OK)
+            {
+                /*
+                 * 解码输出位于 PSRAM。显式回写并失效 cache，避免随后
+                 * 的 SRAM 条带复制读到尚未提交的外部 RAM 数据。
+                 */
+                int64_t cache_started_at = esp_timer_get_time();
+                esp_cache_msync(
+                    job.out_buf, FRAME_BUF_SIZE,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+                s_decode_cache_time_us +=
+                    esp_timer_get_time() - cache_started_at;
+            }
+            s_decode_completed++;
+            if (s_decode_completed == 1)
+                ESP_LOGI(TAG, "First JPEG decode completed: %s",
+                         esp_err_to_name(s_decode_result));
             xSemaphoreGive(s_decode_done);
         }
     }
@@ -82,13 +114,14 @@ static void decode_task(void *arg)
 }
 
 /* ---- 流式读取器 (SD卡) ---- */
-typedef struct {
-    FIL    *file;
+typedef struct
+{
+    FIL *file;
     uint8_t *buf;
-    size_t   buf_size, pos, valid;
+    size_t buf_size, pos, valid;
 } sr_t;
 
-static uint8_t *s_refill_buf = NULL;  /* DMA 对齐读取缓冲 */
+static uint8_t *s_refill_buf = NULL; /* DMA 对齐读取缓冲 */
 
 static esp_err_t sr_open(sr_t *sr, FIL *f, size_t sz)
 {
@@ -96,29 +129,38 @@ static esp_err_t sr_open(sr_t *sr, FIL *f, size_t sz)
     sr->buf_size = sz;
     sr->pos = sr->valid = 0;
     sr->buf = heap_caps_malloc(sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    if (!sr->buf) sr->buf = heap_caps_malloc(sz, MALLOC_CAP_DMA);
-    if (!sr->buf) sr->buf = malloc(sz);
+    if (!sr->buf)
+        sr->buf = heap_caps_malloc(sz, MALLOC_CAP_DMA);
+    if (!sr->buf)
+        sr->buf = malloc(sz);
     return sr->buf ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static void sr_close(sr_t *sr)
 {
-    if (sr->buf) { free(sr->buf); sr->buf = NULL; }
+    if (sr->buf)
+    {
+        free(sr->buf);
+        sr->buf = NULL;
+    }
 }
 
 static esp_err_t sr_refill(sr_t *sr)
 {
-    if (!s_refill_buf) {
+    if (!s_refill_buf)
+    {
         s_refill_buf = heap_caps_malloc(DMA_BUF_SIZE + 32,
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
         if (!s_refill_buf)
             s_refill_buf = heap_caps_malloc(DMA_BUF_SIZE, MALLOC_CAP_DMA);
     }
     uint8_t *ab = s_refill_buf ? s_refill_buf : sr->buf;
     UINT br;
     FRESULT fr = f_read(sr->file, ab, sr->buf_size, &br);
-    if (fr) return ESP_FAIL;
-    if (ab != sr->buf) memcpy(sr->buf, ab, br);
+    if (fr)
+        return ESP_FAIL;
+    if (ab != sr->buf)
+        memcpy(sr->buf, ab, br);
     sr->pos = 0;
     sr->valid = br;
     return br ? ESP_OK : ESP_ERR_NOT_FOUND;
@@ -126,14 +168,16 @@ static esp_err_t sr_refill(sr_t *sr)
 
 static esp_err_t sr_ensure(sr_t *sr, size_t want)
 {
-    if (sr->valid - sr->pos < want) {
+    if (sr->valid - sr->pos < want)
+    {
         if (sr->pos && sr->valid > sr->pos)
             memmove(sr->buf, sr->buf + sr->pos, sr->valid - sr->pos);
         sr->valid -= sr->pos;
         sr->pos = 0;
-        if (!s_refill_buf) {
+        if (!s_refill_buf)
+        {
             s_refill_buf = heap_caps_malloc(DMA_BUF_SIZE + 32,
-                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+                                            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
             if (!s_refill_buf)
                 s_refill_buf = heap_caps_malloc(DMA_BUF_SIZE, MALLOC_CAP_DMA);
         }
@@ -142,7 +186,8 @@ static esp_err_t sr_ensure(sr_t *sr, size_t want)
                           : sr->buf + sr->valid;
         UINT br;
         FRESULT fr = f_read(sr->file, ab, sr->buf_size - sr->valid, &br);
-        if (fr) return ESP_FAIL;
+        if (fr)
+            return ESP_FAIL;
         if (s_refill_buf)
             memcpy(sr->buf + sr->valid, ab, br);
         sr->valid += br;
@@ -152,7 +197,8 @@ static esp_err_t sr_ensure(sr_t *sr, size_t want)
 
 static esp_err_t sr_read(sr_t *sr, uint8_t *d, size_t n)
 {
-    if (sr_ensure(sr, n)) return ESP_FAIL;
+    if (sr_ensure(sr, n))
+        return ESP_FAIL;
     memcpy(d, sr->buf + sr->pos, n);
     sr->pos += n;
     return ESP_OK;
@@ -180,10 +226,13 @@ static esp_err_t sr_read_bytes(sr_t *sr, uint8_t *dst, size_t n)
 
 static esp_err_t sr_skip_pad(sr_t *sr, size_t n)
 {
-    while (n) {
+    while (n)
+    {
         size_t a = sr->valid - sr->pos;
-        if (!a) {
-            if (sr_refill(sr)) return ESP_FAIL;
+        if (!a)
+        {
+            if (sr_refill(sr))
+                return ESP_FAIL;
             a = sr->valid - sr->pos;
         }
         size_t s = n < a ? n : a;
@@ -196,23 +245,29 @@ static esp_err_t sr_skip_pad(sr_t *sr, size_t n)
 /* ---- 非阻塞 LCD 检查 ---- */
 static inline bool lcd_is_ready(void)
 {
-    if (!refresh_done_flag) return false;
+    if (!refresh_done_flag)
+        return false;
     refresh_done_flag = 0;
     return true;
 }
 
 /* ---- 从流中读取一个 AVI chunk ---- */
 static bool read_one_chunk(sr_t *sr, AVI_INFO *avi,
-                            uint8_t *jpeg_out, size_t *jpeg_sz_out)
+                           uint8_t *jpeg_out, size_t *jpeg_sz_out)
 {
-    while (1) {
+    while (1)
+    {
         uint8_t fhdr[8];
-        if (sr_read(sr, fhdr, 8)) return false;
-        if (avi_get_streaminfo(fhdr, avi) != AVI_OK) return false;
+        if (sr_read(sr, fhdr, 8))
+            return false;
+        if (avi_get_streaminfo(fhdr, avi) != AVI_OK)
+            return false;
 
         uint32_t sz = avi->StreamSize;
-        if (memcmp(fhdr, avi->VideoFLAG, 4) == 0) {
-            if (sz <= MAX_JPEG_SIZE) {
+        if (memcmp(fhdr, avi->VideoFLAG, 4) == 0)
+        {
+            if (sz <= MAX_JPEG_SIZE)
+            {
                 if (sr_read_bytes(sr, jpeg_out, sz) != ESP_OK)
                     return false;
                 *jpeg_sz_out = sz;
@@ -225,56 +280,80 @@ static bool read_one_chunk(sr_t *sr, AVI_INFO *avi,
                     sr_skip_pad(sr, 1);
                 continue;
             }
-            if (sz & 1) sr_skip_pad(sr, 1);
+            if (sz & 1)
+                sr_skip_pad(sr, 1);
             return true;
-        } else if (memcmp(fhdr, avi->AudioFLAG, 4) == 0) {
+        }
+        else if (memcmp(fhdr, avi->AudioFLAG, 4) == 0)
+        {
             /* 视频播放器只处理 MJPEG 图像；AVI 内的音频块始终跳过。 */
             sr_skip_pad(sr, sz);
-            if (sz & 1) sr_skip_pad(sr, 1);
-        } else {
+            if (sz & 1)
+                sr_skip_pad(sr, 1);
+        }
+        else
+        {
             sr_skip_pad(sr, sz);
-            if (sz & 1) sr_skip_pad(sr, 1);
+            if (sz & 1)
+                sr_skip_pad(sr, 1);
         }
     }
 }
 
 /* ====== 播放器上下文 (原 video_player_play 的栈变量) ====== */
-typedef struct {
+typedef struct
+{
     bool initialized;
 
-    FIL        file;
-    sr_t       sr;
-    AVI_INFO   avi;
+    FIL file;
+    sr_t sr;
+    AVI_INFO avi;
 
-    uint16_t  *frame_buf[2];
-    uint8_t   *jpeg_buf[2];
-    size_t     jpeg_size[2];
-    uint16_t  *strip_buf[VP_STRIP_BUFS];
-    uint8_t    strip_buf_count;
+    uint16_t *frame_buf[2];
+    uint8_t *jpeg_buf[2];
+    size_t jpeg_size[2];
+    uint16_t *strip_buf[VP_STRIP_BUFS];
+    uint8_t strip_buf_count;
 
-    int        cur, next;
-    bool       have_next;
-    bool       frame_decoded;
-    bool       next_queued;
+    int cur, next;
+    bool have_next;
+    bool frame_decoded;
+    bool next_queued;
 
-    uint32_t   movi_pos;
-    uint16_t   offx, offy;
+    uint32_t movi_pos;
+    uint16_t offx, offy;
 
     /* 帧率控制 */
-    int64_t    next_ts;
-    bool       first_vf;
+    int64_t next_ts;
+    bool first_vf;
 
     /* 性能分析 */
-    uint32_t   frame_count;
-    int64_t    start_ts;
-    int64_t    stats_ts;
-    int        loop_wraps;
+    uint32_t frame_count;
+    int64_t start_ts;
+    int64_t stats_ts;
+    int loop_wraps;
 
-    int16_t    strip_ys;
-    uint16_t   strip_submitted;
-    uint32_t   lcd_done_base;
-    int64_t    last_write_ts;
-    char       name[256];
+    /* 每 PROF_EVERY 帧输出一次的性能累计值。 */
+    int64_t prof_decode_base;
+    int64_t prof_decode_cache_base;
+    int64_t prof_wait_decode;
+    int64_t prof_read;
+    int64_t prof_cache;
+    int64_t prof_rate_wait;
+    int64_t prof_lcd_gate_wait;
+    int64_t prof_copy;
+    int64_t prof_lcd_submit;
+    int64_t prof_lcd_refresh;
+    int64_t wait_decode_started_at;
+    int64_t rate_wait_started_at;
+    int64_t lcd_gate_wait_started_at;
+
+    int16_t strip_ys;
+    uint16_t strip_submitted;
+    uint32_t lcd_done_base;
+    int64_t last_write_ts;
+    int64_t decode_wait_log_ts;
+    char name[256];
 } vp_ctx_t;
 
 static vp_ctx_t g_vp = {0};
@@ -418,13 +497,25 @@ esp_err_t video_player_init(const char *filename)
     esp_err_t ret = ESP_OK;
 
     /* 分配内存 */
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; i++)
+    {
         g_vp.frame_buf[i] = heap_caps_aligned_alloc(
             64, FRAME_BUF_SIZE, MALLOC_CAP_SPIRAM);
-        if (!g_vp.frame_buf[i]) { ESP_LOGE(TAG, "OOM fb"); ret = ESP_ERR_NO_MEM; goto fail; }
+        if (!g_vp.frame_buf[i])
+        {
+            ESP_LOGE(TAG, "OOM fb");
+            ret = ESP_ERR_NO_MEM;
+            goto fail;
+        }
 
-        g_vp.jpeg_buf[i] = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM);
-        if (!g_vp.jpeg_buf[i]) { ESP_LOGE(TAG, "OOM jb"); ret = ESP_ERR_NO_MEM; goto fail; }
+        g_vp.jpeg_buf[i] = heap_caps_aligned_alloc(
+            64, MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM);
+        if (!g_vp.jpeg_buf[i])
+        {
+            ESP_LOGE(TAG, "OOM jb");
+            ret = ESP_ERR_NO_MEM;
+            goto fail;
+        }
     }
     for (int i = 0; i < VP_STRIP_BUFS; i++)
     {
@@ -448,29 +539,40 @@ esp_err_t video_player_init(const char *filename)
         snprintf(fp, sizeof(fp), "%s", filename);
     else
         snprintf(fp, sizeof(fp), "0:/%s", filename[0] == '/' ? filename + 1 : filename);
-    if (f_open(&g_vp.file, fp, FA_READ)) { ret = ESP_ERR_NOT_FOUND; goto fail; }
-
-    if (sr_open(&g_vp.sr, &g_vp.file, DMA_BUF_SIZE) || sr_refill(&g_vp.sr) || g_vp.sr.valid < 1024) {
-        ESP_LOGE(TAG, "header"); ret = ESP_FAIL; goto fail;
+    if (f_open(&g_vp.file, fp, FA_READ))
+    {
+        ret = ESP_ERR_NOT_FOUND;
+        goto fail;
     }
-    if (avi_init(g_vp.sr.buf, g_vp.sr.valid, &g_vp.avi) != AVI_OK) {
-        ret = ESP_FAIL; goto fail;
+
+    if (sr_open(&g_vp.sr, &g_vp.file, DMA_BUF_SIZE) || sr_refill(&g_vp.sr) || g_vp.sr.valid < 1024)
+    {
+        ESP_LOGE(TAG, "header");
+        ret = ESP_FAIL;
+        goto fail;
+    }
+    if (avi_init(g_vp.sr.buf, g_vp.sr.valid, &g_vp.avi) != AVI_OK)
+    {
+        ret = ESP_FAIL;
+        goto fail;
     }
     if (g_vp.avi.Width == 0 || g_vp.avi.Height == 0 ||
         g_vp.avi.Width > 320 || g_vp.avi.Height > 320 ||
-        g_vp.avi.SecPerFrame == 0) {
-        ret = ESP_ERR_NOT_SUPPORTED; goto fail;
+        g_vp.avi.SecPerFrame == 0)
+    {
+        ret = ESP_ERR_NOT_SUPPORTED;
+        goto fail;
     }
     ret = mjpeg_decoder_init(g_vp.avi.Width, g_vp.avi.Height);
     if (ret != ESP_OK)
         goto fail;
 
-    /* 启动 Core1 解码任务 */
-    s_decode_q    = xQueueCreate(1, sizeof(decode_job_t));
+    /* 视频解码留在 CPU0；CPU1 专用于独立音频服务。 */
+    s_decode_q = xQueueCreate(1, sizeof(decode_job_t));
     s_decode_done = xSemaphoreCreateBinary();
     if (!s_decode_q || !s_decode_done ||
         xTaskCreatePinnedToCore(decode_task, "jpeg_sd", 4096, NULL, 5,
-                                &s_decode_task, 1) != pdPASS)
+                                &s_decode_task, 0) != pdPASS)
     {
         ret = ESP_ERR_NO_MEM;
         goto fail;
@@ -486,28 +588,44 @@ esp_err_t video_player_init(const char *filename)
 
     /* 预读前两帧 */
     if (!read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[0], &g_vp.jpeg_size[0]) ||
-        !read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[1], &g_vp.jpeg_size[1])) {
-        ESP_LOGE(TAG, "prefetch fail"); ret = ESP_FAIL; goto fail;
+        !read_one_chunk(&g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[1], &g_vp.jpeg_size[1]))
+    {
+        ESP_LOGE(TAG, "prefetch fail");
+        ret = ESP_FAIL;
+        goto fail;
     }
 
-    /* 提交 F0 到 Core1 解码 */
-    decode_job_t job0 = { g_vp.jpeg_buf[0], g_vp.jpeg_size[0], g_vp.frame_buf[0], ESP_OK };
+    /* 提交 F0 到 CPU0 解码任务 */
+    s_decode_started = 0;
+    s_decode_completed = 0;
+    s_decode_time_us = 0;
+    s_decode_cache_time_us = 0;
+    ret = esp_cache_msync(
+        g_vp.jpeg_buf[0], MAX_JPEG_SIZE,
+        ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+            ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    if (ret != ESP_OK)
+        goto fail;
+    decode_job_t job0 = {g_vp.jpeg_buf[0], g_vp.jpeg_size[0], g_vp.frame_buf[0], ESP_OK};
     if (xQueueSend(s_decode_q, &job0, 0) != pdTRUE)
     {
         ret = ESP_FAIL;
         goto fail;
     }
 
-    g_vp.first_vf   = true;
-    g_vp.have_next  = true;
+    g_vp.first_vf = true;
+    g_vp.have_next = true;
     g_vp.frame_decoded = false;
     g_vp.next_queued = false;
-    g_vp.cur        = 0;
-    g_vp.next       = 1;
-    g_vp.strip_ys   = -1;
-    g_vp.start_ts   = esp_timer_get_time();
-    g_vp.stats_ts   = g_vp.start_ts;
-    g_vp.next_ts    = g_vp.start_ts + g_vp.avi.SecPerFrame;
+    g_vp.cur = 0;
+    g_vp.next = 1;
+    g_vp.strip_ys = -1;
+    g_vp.start_ts = esp_timer_get_time();
+    g_vp.stats_ts = g_vp.start_ts;
+    g_vp.prof_decode_base = 0;
+    g_vp.prof_decode_cache_base = 0;
+    g_vp.next_ts = g_vp.start_ts + g_vp.avi.SecPerFrame;
+    g_vp.decode_wait_log_ts = g_vp.start_ts;
     refresh_done_flag = 1;
 
     ESP_LOGI(TAG, "Init OK: %lux%lu, %lu us/frame",
@@ -521,14 +639,34 @@ fail:
 
 player_ret_t video_player_tick(void)
 {
-    if (!g_vp.initialized) return PLAYER_ERROR;
+    if (!g_vp.initialized)
+        return PLAYER_ERROR;
 
     if (g_vp.strip_ys < 0)
     {
         if (!g_vp.frame_decoded)
         {
             if (xSemaphoreTake(s_decode_done, 0) != pdTRUE)
+            {
+                int64_t now = esp_timer_get_time();
+                if (g_vp.wait_decode_started_at == 0)
+                    g_vp.wait_decode_started_at = now;
+                if (now - g_vp.decode_wait_log_ts >= 1000000)
+                {
+                    ESP_LOGW(TAG,
+                             "Waiting JPEG decode: started=%lu completed=%lu",
+                             (unsigned long)s_decode_started,
+                             (unsigned long)s_decode_completed);
+                    g_vp.decode_wait_log_ts = now;
+                }
                 return PLAYER_BUSY;
+            }
+            if (g_vp.wait_decode_started_at != 0)
+            {
+                g_vp.prof_wait_decode +=
+                    esp_timer_get_time() - g_vp.wait_decode_started_at;
+                g_vp.wait_decode_started_at = 0;
+            }
             if (s_decode_result != ESP_OK ||
                 s_decode_width != g_vp.avi.Width ||
                 s_decode_height != g_vp.avi.Height)
@@ -549,9 +687,22 @@ player_ret_t video_player_tick(void)
             decode_job_t job = {
                 g_vp.jpeg_buf[g_vp.next], g_vp.jpeg_size[g_vp.next],
                 g_vp.frame_buf[g_vp.next], ESP_OK};
+            int64_t stage_started_at = esp_timer_get_time();
+            esp_err_t sync_ret = esp_cache_msync(
+                g_vp.jpeg_buf[g_vp.next], MAX_JPEG_SIZE,
+                ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+                    ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+            g_vp.prof_cache += esp_timer_get_time() - stage_started_at;
+            if (sync_ret != ESP_OK)
+            {
+                ESP_LOGE(TAG, "JPEG cache sync failed: %s",
+                         esp_err_to_name(sync_ret));
+                return PLAYER_ERROR;
+            }
             if (xQueueSend(s_decode_q, &job, 0) != pdTRUE)
                 return PLAYER_BUSY;
 
+            stage_started_at = esp_timer_get_time();
             g_vp.have_next = read_one_chunk(
                 &g_vp.sr, &g_vp.avi, g_vp.jpeg_buf[g_vp.cur],
                 &g_vp.jpeg_size[g_vp.cur]);
@@ -564,13 +715,24 @@ player_ret_t video_player_tick(void)
                     &g_vp.jpeg_size[g_vp.cur]);
                 g_vp.loop_wraps++;
             }
+            g_vp.prof_read += esp_timer_get_time() - stage_started_at;
             g_vp.next_queued = true;
         }
 
         if (!g_vp.first_vf)
         {
-            if (esp_timer_get_time() < g_vp.next_ts)
+            int64_t now = esp_timer_get_time();
+            if (now < g_vp.next_ts)
+            {
+                if (g_vp.rate_wait_started_at == 0)
+                    g_vp.rate_wait_started_at = now;
                 return PLAYER_BUSY;
+            }
+            if (g_vp.rate_wait_started_at != 0)
+            {
+                g_vp.prof_rate_wait += now - g_vp.rate_wait_started_at;
+                g_vp.rate_wait_started_at = 0;
+            }
             g_vp.next_ts += g_vp.avi.SecPerFrame;
         }
         else
@@ -579,13 +741,29 @@ player_ret_t video_player_tick(void)
             g_vp.next_ts = esp_timer_get_time() + g_vp.avi.SecPerFrame;
         }
 
+        int64_t now = esp_timer_get_time();
+        if (g_vp.last_write_ts && now < g_vp.last_write_ts + 17000)
+        {
+            if (g_vp.lcd_gate_wait_started_at == 0)
+                g_vp.lcd_gate_wait_started_at = now;
+            return PLAYER_BUSY;
+        }
         if (!lcd_is_ready())
+        {
+            if (g_vp.lcd_gate_wait_started_at == 0)
+                g_vp.lcd_gate_wait_started_at = now;
             return PLAYER_BUSY;
-        if (g_vp.last_write_ts &&
-            esp_timer_get_time() < g_vp.last_write_ts + 17000)
-            return PLAYER_BUSY;
+        }
+        if (g_vp.lcd_gate_wait_started_at != 0)
+        {
+            g_vp.prof_lcd_gate_wait +=
+                now - g_vp.lcd_gate_wait_started_at;
+            g_vp.lcd_gate_wait_started_at = 0;
+        }
 
+        int64_t te_started_at = esp_timer_get_time();
         spilcd_wait_te();
+        g_vp.prof_lcd_gate_wait += esp_timer_get_time() - te_started_at;
         g_vp.strip_ys = 0;
         g_vp.strip_submitted = 0;
         g_vp.lcd_done_base = refresh_done_count;
@@ -603,16 +781,63 @@ player_ret_t video_player_tick(void)
         if (completed < g_vp.strip_submitted)
             return PLAYER_BUSY;
 
+        int64_t now = esp_timer_get_time();
+        g_vp.prof_lcd_refresh += now - g_vp.last_write_ts;
         g_vp.strip_ys = -1;
         g_vp.frame_count++;
         if (g_vp.frame_count % PROF_EVERY == 0)
         {
-            int64_t now = esp_timer_get_time();
-            float fps = PROF_EVERY * 1000000.0f /
-                        (float)(now - g_vp.stats_ts);
-            ESP_LOGI(TAG, "perf: %.1f fps, frames=%lu, wraps=%d", fps,
-                     (unsigned long)g_vp.frame_count, g_vp.loop_wraps);
+            int64_t window = now - g_vp.stats_ts;
+            int64_t decode = s_decode_time_us - g_vp.prof_decode_base;
+            int64_t cache = g_vp.prof_cache +
+                            s_decode_cache_time_us -
+                            g_vp.prof_decode_cache_base;
+            double percent_scale = window > 0 ? 100.0 / window : 0.0;
+            ESP_LOGI(TAG, "--- VID profile %d frames (total=%lu wrap=%d) ---",
+                     PROF_EVERY, (unsigned long)g_vp.frame_count,
+                     g_vp.loop_wraps);
+            ESP_LOGI(TAG, "  window/avg    : %lld ms, %.1f fps, %.2f ms/frame",
+                     window / 1000,
+                     PROF_EVERY * 1000000.0 / window,
+                     window / (1000.0 * PROF_EVERY));
+            ESP_LOGI(TAG, "  wait decode   : %lld ms (%.1f%%)",
+                     g_vp.prof_wait_decode / 1000,
+                     g_vp.prof_wait_decode * percent_scale);
+            ESP_LOGI(TAG, "  SD read       : %lld ms (%.1f%%)",
+                     g_vp.prof_read / 1000,
+                     g_vp.prof_read * percent_scale);
+            ESP_LOGI(TAG, "  rate control  : %lld ms (%.1f%%)",
+                     g_vp.prof_rate_wait / 1000,
+                     g_vp.prof_rate_wait * percent_scale);
+            ESP_LOGI(TAG, "  LCD gate wait : %lld ms (%.1f%%)",
+                     g_vp.prof_lcd_gate_wait / 1000,
+                     g_vp.prof_lcd_gate_wait * percent_scale);
+            ESP_LOGI(TAG, "  LCD refresh   : %lld ms (%.1f%%)",
+                     g_vp.prof_lcd_refresh / 1000,
+                     g_vp.prof_lcd_refresh * percent_scale);
+            ESP_LOGI(TAG, "  JPEG decode*  : %lld ms (%.1f%%)",
+                     decode / 1000, decode * percent_scale);
+            ESP_LOGI(TAG, "  cache sync*   : %lld ms (%.1f%%)",
+                     cache / 1000, cache * percent_scale);
+            ESP_LOGI(TAG, "  PSRAM->SRAM*  : %lld ms (%.1f%%)",
+                     g_vp.prof_copy / 1000,
+                     g_vp.prof_copy * percent_scale);
+            ESP_LOGI(TAG, "  LCD submit*   : %lld ms (%.1f%%)",
+                     g_vp.prof_lcd_submit / 1000,
+                     g_vp.prof_lcd_submit * percent_scale);
+            ESP_LOGI(TAG, "  * CPU/async stages may overlap wall-time groups");
+
             g_vp.stats_ts = now;
+            g_vp.prof_decode_base = s_decode_time_us;
+            g_vp.prof_decode_cache_base = s_decode_cache_time_us;
+            g_vp.prof_wait_decode = 0;
+            g_vp.prof_read = 0;
+            g_vp.prof_cache = 0;
+            g_vp.prof_rate_wait = 0;
+            g_vp.prof_lcd_gate_wait = 0;
+            g_vp.prof_copy = 0;
+            g_vp.prof_lcd_submit = 0;
+            g_vp.prof_lcd_refresh = 0;
         }
 
         g_vp.cur = g_vp.next;
@@ -631,26 +856,43 @@ player_ret_t video_player_tick(void)
     uint16_t *strip =
         g_vp.strip_buf[g_vp.strip_submitted % g_vp.strip_buf_count];
     size_t bytes = (size_t)rows * g_vp.avi.Width * sizeof(uint16_t);
+    if (ys == 0)
+    {
+        int64_t cache_started_at = esp_timer_get_time();
+        esp_err_t sync_ret = esp_cache_msync(
+            g_vp.frame_buf[g_vp.cur], FRAME_BUF_SIZE,
+            ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        g_vp.prof_cache += esp_timer_get_time() - cache_started_at;
+        if (sync_ret != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Frame cache sync failed: %s",
+                     esp_err_to_name(sync_ret));
+            return PLAYER_ERROR;
+        }
+    }
+    int64_t copy_started_at = esp_timer_get_time();
     memcpy(strip, g_vp.frame_buf[g_vp.cur] + ys * g_vp.avi.Width, bytes);
+    g_vp.prof_copy += esp_timer_get_time() - copy_started_at;
 
-    esp_err_t ret;
-    if (g_vp.strip_submitted == 0)
-    {
-        ret = esp_lcd_jd9855_draw_bitmap_start(
-            panel_handle, g_vp.offx, g_vp.offy,
-            g_vp.offx + g_vp.avi.Width, g_vp.offy + g_vp.avi.Height,
-            strip, bytes);
-    }
-    else
-    {
-        ret = esp_lcd_jd9855_draw_bitmap_continue(
-            panel_handle, strip, bytes);
-    }
+    /*
+     * 与 IMG 已验证路径保持一致：每条带独立设置窗口并使用 RAMWR。
+     * SD 视频优先保证正确性，不使用双缓冲 RAMWRC 连续写。
+     */
+    int64_t submit_started_at = esp_timer_get_time();
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(
+        panel_handle,
+        g_vp.offx, g_vp.offy + ys,
+        g_vp.offx + g_vp.avi.Width, g_vp.offy + ys + rows,
+        strip);
+    g_vp.prof_lcd_submit += esp_timer_get_time() - submit_started_at;
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "LCD submit failed: %s", esp_err_to_name(ret));
         return PLAYER_ERROR;
     }
+    if (g_vp.frame_count == 0 && g_vp.strip_submitted == 0)
+        ESP_LOGI(TAG, "First LCD strip submitted");
     g_vp.strip_submitted++;
     g_vp.strip_ys = ys + rows;
     return PLAYER_BUSY;
@@ -658,7 +900,8 @@ player_ret_t video_player_tick(void)
 
 void video_player_stop(void)
 {
-    if (!g_vp.initialized) return;
+    if (!g_vp.initialized)
+        return;
 
     bool lcd_idle = true;
     if (g_vp.strip_submitted > 0)
@@ -673,26 +916,47 @@ void video_player_stop(void)
     }
 
     /* 通知解码任务退出 */
-    if (s_decode_q && s_decode_task) {
-        decode_job_t shutdown = { NULL, 0, NULL, ESP_OK };
+    if (s_decode_q && s_decode_task)
+    {
+        decode_job_t shutdown = {NULL, 0, NULL, ESP_OK};
         xQueueSend(s_decode_q, &shutdown, portMAX_DELAY);
         int wait = 0;
-        while (eTaskGetState(s_decode_task) != eDeleted && wait < 100) {
-            vTaskDelay(pdMS_TO_TICKS(1)); wait++;
+        while (eTaskGetState(s_decode_task) != eDeleted && wait < 100)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            wait++;
         }
         s_decode_task = NULL;
     }
-    if (s_decode_q)   { vQueueDelete(s_decode_q);   s_decode_q   = NULL; }
-    if (s_decode_done){ vSemaphoreDelete(s_decode_done); s_decode_done = NULL; }
+    if (s_decode_q)
+    {
+        vQueueDelete(s_decode_q);
+        s_decode_q = NULL;
+    }
+    if (s_decode_done)
+    {
+        vSemaphoreDelete(s_decode_done);
+        s_decode_done = NULL;
+    }
 
     mjpeg_decoder_deinit();
 
-    if (g_vp.file.obj.fs) f_close(&g_vp.file);
+    if (g_vp.file.obj.fs)
+        f_close(&g_vp.file);
     sr_close(&g_vp.sr);
 
-    for (int i = 0; i < 2; i++) {
-        if (g_vp.frame_buf[i]) { heap_caps_free(g_vp.frame_buf[i]); g_vp.frame_buf[i] = NULL; }
-        if (g_vp.jpeg_buf[i])  { free(g_vp.jpeg_buf[i]);           g_vp.jpeg_buf[i]  = NULL; }
+    for (int i = 0; i < 2; i++)
+    {
+        if (g_vp.frame_buf[i])
+        {
+            heap_caps_free(g_vp.frame_buf[i]);
+            g_vp.frame_buf[i] = NULL;
+        }
+        if (g_vp.jpeg_buf[i])
+        {
+            free(g_vp.jpeg_buf[i]);
+            g_vp.jpeg_buf[i] = NULL;
+        }
     }
     for (int i = 0; i < VP_STRIP_BUFS; i++)
     {
@@ -711,17 +975,21 @@ void video_player_stop(void)
 esp_err_t video_player_play(const char *filename)
 {
     esp_err_t ret = video_player_init(filename);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK)
+        return ret;
 
-    while (1) {
+    while (1)
+    {
         player_ret_t r = video_player_tick();
-        if (r == PLAYER_ERROR) {
+        if (r == PLAYER_ERROR)
+        {
             video_player_stop();
             return ESP_FAIL;
         }
         /* PLAYER_BUSY → continue looping (non-blocking in tick mode,
          * but in blocking wrapper we just retry) */
-        if (r == PLAYER_BUSY) {
+        if (r == PLAYER_BUSY)
+        {
             vTaskDelay(1);
         }
     }

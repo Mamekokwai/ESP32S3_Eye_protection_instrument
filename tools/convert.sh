@@ -7,9 +7,12 @@
 #  配置: 同目录下 convert.conf
 #
 #  用法:
-#    ./convert.sh video.mp4     → 输出 video.avi
+#    ./convert.sh video.mp4     → 输出 video_320x320_30fps_JQ5.avi
 #    ./convert.sh               → 批量转换 convert.conf 中的文件列表
 #    ./convert.sh -c            → 仅检查 ffmpeg 是否可用
+#
+#  命名规则: <原始名>_<宽>x<高>_<帧率>fps_JQ<质量>
+#  示例: 散光1.mp4 → 散光1_320x240_30fps_JQ5.avi
 # ============================================================
 
 set -euo pipefail
@@ -42,7 +45,7 @@ check_ffmpeg() {
 # ---- 转换单个文件 ----
 convert_one() {
     local input="$1"
-    local output="${input%.*}.avi"
+    local input_dir="$(dirname "$input")"
 
     if [[ ! -f "$input" ]]; then
         echo "[ERROR] 文件不存在: $input"
@@ -51,7 +54,6 @@ convert_one() {
 
     echo "============================================"
     echo "  输入: $input"
-    echo "  输出: $output"
 
     # 获取输入信息
     local in_w in_h in_fps
@@ -65,6 +67,28 @@ convert_one() {
     fi
 
     echo "  原始: ${in_w}x${in_h}, ${in_fps} fps"
+
+    # 确定有效帧率
+    local effective_fps
+    if [[ "${FPS:-0}" != "0" ]]; then
+        effective_fps="$FPS"
+    else
+        # Round input fps to integer
+        effective_fps=$(printf "%.0f" "$in_fps" 2>/dev/null || echo "$in_fps")
+    fi
+
+    # ---- 构建输出文件名 ----
+    # 取不带扩展名的原始文件名
+    local base="${input##*/}"
+    base="${base%.*}"
+
+    # 去掉已有的 _WxH_数字fps_JQ数字 后缀，避免重复
+    local clean_base
+    clean_base=$(echo "$base" | sed -E 's/_[0-9]+x[0-9]+_[0-9]+fps(_JQ[0-9]+)?$//')
+
+    # 按命名规则: <名>_<宽>x<高>_<帧率>fps_JQ<质量>.avi
+    local output="${input_dir}/${clean_base}_${MAX_WIDTH}x${MAX_HEIGHT}_${effective_fps}fps_JQ${JPEG_QUALITY}.avi"
+    echo "  输出: $output"
 
     # 构建滤镜
     local vf="scale=${MAX_WIDTH}:${MAX_HEIGHT}:force_original_aspect_ratio=decrease,pad=${MAX_WIDTH}:${MAX_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
@@ -140,6 +164,6 @@ case "${1:-}" in
         check_ffmpeg
         convert_one "$1"
         echo ""
-        echo "将 ${1%.*}.avi 复制到 SD 卡即可"
+        echo "转换完成, 将 .avi 文件复制到 SD 卡即可"
         ;;
 esac

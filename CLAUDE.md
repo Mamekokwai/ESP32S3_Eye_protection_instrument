@@ -175,7 +175,8 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 ESP32 收到未知指令返回 `ERR unknown: <cmd>`。
 `SDLIST` 每页显示 12 项，超出屏幕宽度的文件名会截断；执行时只停止当前视频/图片显示，音频继续播放。
 `IMG` 仅支持 Baseline `.jpg/.jpeg`，文件不超过 1 MiB、解码尺寸不超过 320×320；小图居中，Progressive JPEG 需先转为 Baseline。
-`VID` 仅选择 TF 卡根目录中的 `.avi`，要求 MJPEG、最大 320×320，AVI 内音频块会跳过。压缩帧与解码帧放 PSRAM，显示前复制到内部 SRAM 条带，禁止 PSRAM 直接 DMA 到 LCD。
+`VID` 仅选择 TF 卡根目录中的 `.avi`，要求 MJPEG、最大 320×320，AVI 内音频块会跳过。压缩帧与解码帧放 PSRAM并显式同步 cache，显示前复制到单个内部 SRAM 80 行条带，再按与 IMG 相同的独立窗口 DMA 提交；禁止 PSRAM 直接 DMA 到 LCD。TF 视频解码任务固定 CPU0，CPU1 留给独立音频任务。
+TF 视频每 100 帧输出一次 `VID profile`，统计解码等待、SD 读取、帧率控制、LCD 刷新、JPEG 解码、cache 同步和 PSRAM→SRAM 复制的耗时占比；带 `*` 的异步/CPU 项可能与墙钟阶段重叠。
 `VPLAY`、`VID`、`IMG` 与 `APLAY` 的音频/显示状态相互独立；`SLEEP` 属于整机操作，会停止两者。
 
 ## 播放器类型

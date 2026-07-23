@@ -113,7 +113,8 @@ static void IRAM_ATTR tick_isr(void *arg)
 {
     BaseType_t woken = pdFALSE;
     xSemaphoreGiveFromISR(s_tick_sem, &woken);
-    if (woken) portYIELD_FROM_ISR();
+    if (woken)
+        portYIELD_FROM_ISR();
 }
 
 /* ====== Workspace ====== */
@@ -215,30 +216,30 @@ void app_main(void)
     ESP_LOGI(TAG, "SD mount...");
     sd_spi_init(); /* 音频用, 失败不阻塞 */
 
-    /* 显示测试图片 */
-    {
-        extern const uint8_t testimage_data[];
-#define IMG_STRIP_H 20
-        uint16_t *buf = heap_caps_malloc(320 * IMG_STRIP_H * sizeof(uint16_t), MALLOC_CAP_DMA);
-        if (!buf)
-        {
-            ESP_LOGE(TAG, "DMA buf alloc failed");
-        }
-        else
-        {
-            for (int y = 0; y < 320; y += IMG_STRIP_H)
-            {
-                int h = (y + IMG_STRIP_H > 320) ? 320 - y : IMG_STRIP_H;
-                memcpy(buf, testimage_data + y * 320 * 2, 320 * h * 2);
-                refresh_done_flag = 0;
-                esp_lcd_panel_draw_bitmap(panel_handle, 0, y, 320, y + h, buf);
-                while (!refresh_done_flag)
-                    vTaskDelay(1);
-            }
-            heap_caps_free(buf);
-            ESP_LOGI(TAG, "image draw done");
-        }
-    }
+    //     /* 显示测试图片 */
+    //     {
+    //         extern const uint8_t testimage_data[];
+    // #define IMG_STRIP_H 20
+    //         uint16_t *buf = heap_caps_malloc(320 * IMG_STRIP_H * sizeof(uint16_t), MALLOC_CAP_DMA);
+    //         if (!buf)
+    //         {
+    //             ESP_LOGE(TAG, "DMA buf alloc failed");
+    //         }
+    //         else
+    //         {
+    //             for (int y = 0; y < 320; y += IMG_STRIP_H)
+    //             {
+    //                 int h = (y + IMG_STRIP_H > 320) ? 320 - y : IMG_STRIP_H;
+    //                 memcpy(buf, testimage_data + y * 320 * 2, 320 * h * 2);
+    //                 refresh_done_flag = 0;
+    //                 esp_lcd_panel_draw_bitmap(panel_handle, 0, y, 320, y + h, buf);
+    //                 while (!refresh_done_flag)
+    //                     vTaskDelay(1);
+    //             }
+    //             heap_caps_free(buf);
+    //             ESP_LOGI(TAG, "image draw done");
+    //         }
+    //     }
 
     // gpio_config_t lc = {.pin_bit_mask = BIT64(1), .mode = GPIO_MODE_OUTPUT};
     // gpio_config(&lc);
@@ -268,7 +269,7 @@ void app_main(void)
 
     while (1)
     {
-        xSemaphoreTake(s_tick_sem, portMAX_DELAY);  /* 阻塞等 1ms tick, 让出 CPU 给 idle */
+        xSemaphoreTake(s_tick_sem, portMAX_DELAY); /* 阻塞等 1ms tick, 让出 CPU 给 idle */
         if (++ws >= WS_NUM)
             ws = 0;
 
@@ -285,12 +286,12 @@ void app_main(void)
         //      ESP_LOGI(TAG, "测试信息");
         //  }
 
-        // 1S打印一次日志 不要删除
-        if (++test1 >= 1000)
-        {
-            test1 = 0;
-            ESP_LOGI(TAG, "测试信息");
-        }
+        // // 1S打印一次日志 不要删除
+        // if (++test1 >= 1000)
+        // {
+        //     test1 = 0;
+        //     ESP_LOGI(TAG, "测试信息");
+        // }
 
         switch (ws)
         {
