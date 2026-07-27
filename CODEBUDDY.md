@@ -30,7 +30,6 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | TE 帧同步 | ❌ 不可用 | JD9855 0x35 无法使能 TE, GPIO1 始终 LOW |
 | SD 卡音频播放 | ⚠️ 未验证 | PCM 16bit/mono/16kHz、MP3, 待真机验证 |
 | UART 指令 | ✅ | VPLAY/VIDLIST/VID/VSTOP/VPAUSE/STATUS/INFO/... |
-| 软复位烧录 | ✅ | DL 指令 → GPIO0 hold → esp_restart |
 
 ## 已解决的关键问题
 
@@ -57,6 +56,7 @@ GPIO1 曾同时作为 LCD TE 输入和旧 LED 输出，输出模式破坏 LCD �
 `flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；Flash 视频使用双 40 行条带，TF 视频使用单 160 行条带。
 
 显示状态和音频状态相互独立：视频/图片共用 LCD，二者互斥；Flash/TF JPEG 解码固定 CPU0，音频固定 CPU1，不做音画同步。ES8311/I2S 固定 44.1kHz，其他输入采样率由音频任务软件转换，避免播放期间 I2C 重配。
+`VOL` 使用 PCM 软件音量，不写 ES8311 I2C 寄存器；`AMUTE` 通过 GPIO2 关闭功放。
 
 ### 5. 传输与运行速度优化
 
@@ -83,7 +83,6 @@ main/
 ├── avi.c/h             # AVI 解析 (RIFF/movi/strh/strf)
 ├── mjpeg.c/h           # JPEG 解码 (esp_new_jpeg SIMD, RGB565_LE)
 ├── audio.c/h           # ES8311 音频驱动 (I2C+I2S)
-├── reset_to_dl.c/h     # 软复位到烧录模式
 └── idf_component.yml   # esp_new_jpeg, esp_jpeg 依赖
 
 components/BSP/
@@ -125,7 +124,7 @@ tools/                   # 视频转换 + 烧录脚本
 | SD CLK | IO21 | |
 | SD CMD | IO47 | |
 | SD D0 | IO14 | |
-| SD DAT3/BOOT | IO0 | 1-bit 运行时不用；`DL` 复位时拉低 |
+| SD DAT3/BOOT | IO0 | 1-bit 运行时不用；硬件烧录启动脚 |
 | ES8311 I2C | SDA=IO4 SCL=IO5 | |
 | ES8311 I2S | MCLK=IO45 BCLK=IO39 WS=IO41 DOUT=IO42 | |
 | UART1 RX | IO44 | CA51F352P4 → ESP32 |
@@ -150,7 +149,7 @@ tools/                   # 视频转换 + 烧录脚本
 | VOL 0-100 | 音量 |
 | STATUS / INFO | 查询状态/系统信息 |
 | SLEEP / WAKE | 休眠/唤醒 |
-| DL / RST | 烧录模式/重启 |
+| RST | 重启 |
 
 `IMG` 支持不超过 1 MiB、最大 320×320 的 Baseline `.jpg/.jpeg`；小图居中显示。完整压缩数据和 RGB565 帧位于 PSRAM，LCD 仅接收内部 SRAM 的 80 行 DMA 条带。
 `VPLAY`、`VID`、`IMG` 不会停止音频，`APLAY` 也不会停止视频或取消图片加载；仅 `SLEEP` 会同时停止显示和音频。TF 视频解码固定 CPU0、音频固定 CPU1；TF 视频帧缓冲位于 PSRAM并显式同步 cache，LCD 使用单个内部 SRAM 160 行条带逐窗口 DMA。

@@ -48,7 +48,7 @@ bool audio_player_is_active(void);
 /**
  * @brief  设置音量 0-100
  */
-void audio_player_set_volume(int vol);
+esp_err_t audio_player_set_volume(int vol);
 
 /**
  * @brief  切换静音

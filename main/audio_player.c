@@ -359,14 +359,15 @@ bool audio_player_is_active(void)
     return active;
 }
 
-void audio_player_set_volume(int vol)
+esp_err_t audio_player_set_volume(int vol)
 {
     audio_lock();
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
     g_ap.volume = vol;
-    audio_set_volume(vol);
+    esp_err_t ret = audio_set_volume(vol);
     audio_unlock();
+    return ret;
 }
 
 bool audio_player_toggle_mute(void)
@@ -374,10 +375,8 @@ bool audio_player_toggle_mute(void)
     audio_lock();
     g_ap.muted = !g_ap.muted;
     if (g_ap.muted) {
-        audio_set_volume(0);
         audio_amp_set_enabled(false);
     } else {
-        audio_set_volume(g_ap.volume);
         if (g_ap.initialized)
             audio_amp_set_enabled(true);
     }

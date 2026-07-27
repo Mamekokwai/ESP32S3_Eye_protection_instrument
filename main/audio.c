@@ -254,13 +254,14 @@ static esp_err_t init_es8311_codec(void)
         return ret;
     }
 
-    ret = esp_codec_dev_set_out_vol(codec_dev, current_volume);
+    /* Codec 只在启动时设为固定满幅，运行期音量由 PCM 软件缩放。 */
+    ret = esp_codec_dev_set_out_vol(codec_dev, 100);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to set initial volume: %d", ret);
         return ESP_FAIL;
     }
     current_sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
-    ESP_LOGI(TAG, "ES8311 codec ready: %d Hz, 16-bit mono, volume=%d",
+    ESP_LOGI(TAG, "ES8311 codec ready: %d Hz, 16-bit mono, software volume=%d",
              current_sample_rate, current_volume);
     return ESP_OK;
 }
@@ -382,7 +383,9 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
     if (sample_rate < 8000 || sample_rate > 48000)
         return ESP_ERR_INVALID_ARG;
 
-    if (sample_rate == AUDIO_OUTPUT_SAMPLE_RATE && channels == 1) {
+    const int volume = current_volume;
+    if (sample_rate == AUDIO_OUTPUT_SAMPLE_RATE && channels == 1 &&
+        volume == 100) {
         int bytes = (int)(num_samples * sizeof(int16_t));
         return esp_codec_dev_write(codec_dev, (void *)samples, bytes) ==
                        ESP_CODEC_DEV_OK
@@ -414,7 +417,8 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
             int32_t first = read_mono_sample(samples, index, channels);
             int32_t second = read_mono_sample(samples, next, channels);
             int64_t delta = (int64_t)(second - first) * fraction;
-            output[i] = (int16_t)(first + (delta >> 32));
+            int32_t value = first + (int32_t)(delta >> 32);
+            output[i] = (int16_t)(value * volume / 100);
             position += step;
         }
 
@@ -429,13 +433,13 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
 
 esp_err_t audio_set_volume(int vol)
 {
-    if (!s_audio_ready || codec_dev == NULL) {
+    if (!s_audio_ready || codec_dev == NULL)
         return ESP_ERR_INVALID_STATE;
-    }
-    if (vol < 0) vol = 0;
-    if (vol > 100) vol = 100;
+    if (vol < 0 || vol > 100)
+        return ESP_ERR_INVALID_ARG;
     current_volume = vol;
-    return esp_codec_dev_set_out_vol(codec_dev, vol);
+    ESP_LOGI(TAG, "Software volume=%d", vol);
+    return ESP_OK;
 }
 
 /* ================================================================

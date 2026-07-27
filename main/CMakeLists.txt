@@ -6,7 +6,6 @@ idf_component_register(
         "mp3_decoder_wrapper.cpp"
         "sd_browser.c"
         "image_viewer.c"
-        "reset_to_dl.c"
         "main.c"
         "audio.c"
         "avi.c"

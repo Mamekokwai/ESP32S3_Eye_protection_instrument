@@ -39,4 +39,4 @@ Recent history uses concise imperative commits, often with prefixes such as `fea
 
 ## Security & Configuration Tips
 
-Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, audio, UART, boot, or TE-related code. GPIO2 is the active-high audio amplifier MUTE/enable pin and must not be used as a heartbeat LED. The current TF path is SDMMC 1-bit at 40 MHz; GPIO0 is not used for normal card transfer but is still the BOOT strap used by `DL`.
+Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, audio, UART, boot, or TE-related code. GPIO2 is the active-high audio amplifier MUTE/enable pin and must not be used as a heartbeat LED. The current TF path is SDMMC 1-bit at 40 MHz; GPIO0 is not used for normal card transfer.

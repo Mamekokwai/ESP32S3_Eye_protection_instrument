@@ -45,7 +45,7 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
                           int sample_rate, int channels);
 
 /**
- * @brief 设置输出音量
+ * @brief 设置 PCM 软件音量，运行期不访问 ES8311 I2C
  * @param vol 音量 0~100
  * @return ESP_OK 成功
  */

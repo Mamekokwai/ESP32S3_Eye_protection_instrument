@@ -8,7 +8,7 @@
  *
  * 指令: VPLAY / VIDLIST / VID / VPAUSE / VRESUME / VSTOP
  *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST / IMGLIST / IMG
- *       DL / RST / STATUS / INFO / SLEEP / WAKE
+ *       RST / STATUS / INFO / SLEEP / WAKE
  */
 
 #include "app_uart.h"
@@ -32,7 +32,6 @@
 #include "audio_player.h"
 #include "sd_browser.h"
 #include "image_viewer.h"
-#include "reset_to_dl.h"
 
 #define TAG "uart"
 
@@ -375,10 +374,16 @@ static void cmd_handle(const char *cmd)
         int v = atoi(cmd + 4);
         if (v < 0) v = 0;
         if (v > 100) v = 100;
-        audio_player_set_volume(v);
-        char r[32];
-        snprintf(r, sizeof(r), "OK VOL %d", v);
-        uart_send_str(r);
+        esp_err_t ret = audio_player_set_volume(v);
+        if (ret == ESP_OK) {
+            char r[32];
+            snprintf(r, sizeof(r), "OK VOL %d", v);
+            uart_send_str(r);
+        } else {
+            char r[48];
+            snprintf(r, sizeof(r), "ERR VOL %s", esp_err_to_name(ret));
+            uart_send_str(r);
+        }
         return;
     }
 
@@ -455,12 +460,6 @@ static void cmd_handle(const char *cmd)
     }
 
     /* === 系统控制 === */
-    if (strcasecmp(cmd, "DL") == 0)
-    {
-        uart_send_str("OK DL");
-        vTaskDelay(pdMS_TO_TICKS(100));
-        reboot_to_download();
-    }
     if (strcasecmp(cmd, "RST") == 0)
     {
         uart_send_str("OK RST");

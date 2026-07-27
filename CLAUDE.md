@@ -35,7 +35,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | CLK | IO21 | |
 | CMD | IO47 | R21 10K 上拉 |
 | D0 | IO14 | |
-| DAT3/BOOT | IO0 | SDMMC 1-bit 运行时不用；`DL` 复位时拉低 |
+| DAT3/BOOT | IO0 | SDMMC 1-bit 运行时不用；硬件烧录启动脚 |
 | **ES8311 I2C** | SDA=IO4, SCL=IO5 | |
 | **ES8311 I2S** | MCLK=IO45, BCLK=IO39, WS=IO41, DOUT=IO42, DIN=IO40 |
 | **功放 MUTE/使能** | IO2 | 高电平开启喇叭；停止/静音时拉低 |
@@ -88,7 +88,6 @@ main/
 ├── sd_browser.c/h      # SD 卡目录浏览器 (SDLIST 命令, 分页显 TF 卡根目录)
 ├── testimage_data.c    # 内嵌开机测试图片 (EMBED_FILES)
 ├── mp3_decoder_wrapper.h # MP3 软解 wrapper 头文件 (helix MP3 decoder)
-├── reset_to_dl.c/h     # 软复位到下载模式 (RTC GPIO hold IO0→esp_restart)
 ├── beep.c/h            # PWM 蜂鸣器 (IO46冲突, 未编译, 仅保留)
 ├── canon.pcm           # 内嵌测试音频 (EMBED_FILES)
 ├── idf_component.yml   # IDF 组件管理器依赖
@@ -166,7 +165,6 @@ ESP32 UART0 TX ──→ IO43 ──→ 电脑 USB RX      (调试输出)
 | `ASTOP` | 停止音频 | `OK ASTOP` |
 | `AMUTE` | 静音切换 | `OK AMUTE on/off` |
 | `VOL <0-100>` | 设置音量 | `OK VOL 80` |
-| `DL` | 软复位进入烧录模式 | `OK DL` |
 | `RST` | 系统重启 | `OK RST` |
 | `STATUS` | 分别查询显示和音频状态 | `STATUS display=video_playing audio=0:music.mp3` |
 | `INFO` | 查询系统信息 | `INFO heap=xxx` |
@@ -222,24 +220,10 @@ TF 视频每 100 帧输出一次 `VID profile`，统计解码等待、SD 读取�
 - 切换: `mjpeg.c` 改 `JPEG_DECODER` 宏
 - 依赖由 `main/idf_component.yml` 管理: `espressif/esp_new_jpeg` + `espressif/esp_jpeg`
 
-## UART 软复位下载
-
-`main/reset_to_dl.c` — 软件触发进入下载模式:
-
-```c
-#include "reset_to_dl.h"
-reboot_to_download();  // 立即复位到烧录模式
-```
-
-原理: `gpio_hold_en(GPIO_NUM_0)` + `gpio_deep_sleep_hold_en()` 在 `esp_restart()` 期间保持 IO0 低电平,
-ROM bootloader 检测到后进入下载模式。
-
-注意: ESP32-S3 只有 GPIO 0-21 是 RTC GPIO, IO46 不是, 已从代码中移除。
-GPIO0 在当前 SDMMC 1-bit 模式下不传输 TF 数据，仅在 `DL` 复位时作为 BOOT strap 拉低；BOOT 按键初始化和扫描代码已移除。
-
 ## 注意事项
 
 - ES8311/I2S 固定为 44.1kHz、16-bit 单声道；16kHz PCM 和 8–48kHz MP3 在 CPU1 内线性转换到 44.1kHz，播放期间禁止 `esp_codec_dev_close/open`
+- `VOL 0-100` 在 PCM 输出前做软件幅度缩放，不在运行期通过 I2C 修改 ES8311 音量寄存器；`AMUTE` 直接拉低 GPIO2
 - GPIO2 为功放 MUTE/使能脚：播放且未静音时拉高，停止、错误或 `AMUTE` 时拉低；禁止恢复心跳 LED
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - TF 卡使用 SDMMC 外设，LCD 使用 i80 外设，两者不争用同一外设总线
