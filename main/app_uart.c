@@ -6,7 +6,8 @@
  *
  * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
  *
- * 指令: VPLAY / VIDLIST / VID / VPAUSE / VRESUME / VSTOP
+ * 指令: VLIST / VPLAY / FIMGLIST / FIMG
+ *       VIDLIST / VID / VPAUSE / VRESUME / VSTOP
  *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST / IMGLIST / IMG
  *       RST / STATUS / INFO / SLEEP / WAKE
  */
@@ -77,30 +78,65 @@ static void cmd_handle(const char *cmd)
 {
     ESP_LOGI(TAG, "CMD: [%s]", cmd);
 
-    /* === 视频控制 === */
-    if (strcasecmp(cmd, "VPLAY") == 0)
+    /* === Flash AVI视频 === */
+    if (strcasecmp(cmd, "VLIST") == 0)
     {
-        if (is_flash_video_mode())
+        char list[512];
+        int count = flash_player_list_files(list, sizeof(list));
+        if (count > 0)
         {
-            uart_send_str("OK VPLAY (already)");
+            uart_send_str("VLIST");
+            uart_send_str(list);
+        }
+        else if (count == 0)
+            uart_send_str("VLIST NONE");
+        else
+            uart_send_str("ERR flash media index");
+        return;
+    }
+    if (strcasecmp(cmd, "VPLAY") == 0 ||
+        strncasecmp(cmd, "VPLAY ", 6) == 0)
+    {
+        bool use_default = cmd[5] == '\0';
+        const char *selection = use_default ? "1" : cmd + 6;
+        while (*selection == ' ')
+            selection++;
+        if (!*selection)
+        {
+            uart_send_str("ERR usage: VPLAY [n or filename.avi]");
+            return;
+        }
+        if (use_default && is_flash_video_mode())
+        {
+            char response[96];
+            snprintf(response, sizeof(response), "OK VPLAY %s (already)",
+                     flash_player_name());
+            uart_send_str(response);
+            return;
+        }
+
+        stop_display_video();
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
+            image_viewer_cancel();
+        g_display_mode = DISPLAY_IDLE;
+
+        esp_err_t ret = flash_player_start(selection);
+        if (ret == ESP_OK)
+        {
+            g_display_mode = DISPLAY_VIDEO_PLAYING;
+            spilcd_show_string(0, 0, 320, 16, 16,
+                               "Video playing", BLACK);
+            char response[96];
+            snprintf(response, sizeof(response), "OK VPLAY %s",
+                     flash_player_name());
+            uart_send_str(response);
         }
         else
         {
-            if (is_sd_video_mode())
-                video_player_stop();
-            if (g_display_mode == DISPLAY_IMAGE_LOADING)
-                image_viewer_cancel();
-            g_display_mode = DISPLAY_IDLE;
-            if (flash_player_init() == ESP_OK)
-            {
-                g_display_mode = DISPLAY_VIDEO_PLAYING;
-                spilcd_show_string(0, 0, 320, 16, 16, "Video playing", BLACK);
-                uart_send_str("OK VPLAY");
-            }
-            else
-            {
-                uart_send_str("ERR no video in flash (use tools/flash_video.sh)");
-            }
+            char response[64];
+            snprintf(response, sizeof(response), "ERR VPLAY %s",
+                     esp_err_to_name(ret));
+            uart_send_str(response);
         }
         return;
     }
@@ -253,7 +289,58 @@ static void cmd_handle(const char *cmd)
         return;
     }
 
-    /* === TF 卡 JPEG 图片 === */
+    /* === Flash JPEG图片 === */
+    if (strcasecmp(cmd, "FIMGLIST") == 0)
+    {
+        char list[512];
+        int count = image_viewer_list_flash_files(list, sizeof(list));
+        if (count > 0)
+        {
+            uart_send_str("FIMGLIST");
+            uart_send_str(list);
+        }
+        else if (count == 0)
+            uart_send_str("FIMGLIST NONE");
+        else
+            uart_send_str("ERR flash media index");
+        return;
+    }
+    if (strcasecmp(cmd, "FIMG") == 0)
+    {
+        uart_send_str("ERR usage: FIMG <n> or FIMG <filename.jpg>");
+        return;
+    }
+    if (strncasecmp(cmd, "FIMG ", 5) == 0)
+    {
+        const char *arg = cmd + 5;
+        while (*arg == ' ')
+            arg++;
+        if (!*arg)
+        {
+            uart_send_str("ERR usage: FIMG <n> or FIMG <filename.jpg>");
+            return;
+        }
+        stop_display_video();
+        if (g_display_mode == DISPLAY_IMAGE_LOADING)
+            image_viewer_cancel();
+        g_display_mode = DISPLAY_IDLE;
+        esp_err_t ret = image_viewer_start_flash(arg);
+        if (ret == ESP_OK)
+        {
+            g_display_mode = DISPLAY_IMAGE_LOADING;
+            uart_send_str("OK FIMG loading");
+        }
+        else
+        {
+            char response[64];
+            snprintf(response, sizeof(response), "ERR FIMG %s",
+                     esp_err_to_name(ret));
+            uart_send_str(response);
+        }
+        return;
+    }
+
+    /* === TF卡JPEG图片 === */
     if (strcasecmp(cmd, "IMGLIST") == 0)
     {
         char list[512];

@@ -81,7 +81,8 @@ static void display_tick(void)
         if (image_state == IMAGE_VIEWER_DONE)
         {
             char response[192];
-            snprintf(response, sizeof(response), "OK IMG %s %lux%lu",
+            snprintf(response, sizeof(response), "OK %s %s %lux%lu",
+                     image_viewer_command(),
                      image_viewer_name(),
                      (unsigned long)image_viewer_width(),
                      (unsigned long)image_viewer_height());
@@ -91,7 +92,8 @@ static void display_tick(void)
         else if (image_state == IMAGE_VIEWER_ERROR)
         {
             char response[64];
-            snprintf(response, sizeof(response), "ERR IMG %s",
+            snprintf(response, sizeof(response), "ERR %s %s",
+                     image_viewer_command(),
                      esp_err_to_name(image_viewer_last_error()));
             app_uart_send(response);
             g_display_mode = DISPLAY_IDLE;

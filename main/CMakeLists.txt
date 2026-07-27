@@ -3,6 +3,7 @@ idf_component_register(
         "app_uart.c"
         "audio_player.c"
         "media_catalog.c"
+        "flash_media.c"
         "mp3_decoder_wrapper.cpp"
         "sd_browser.c"
         "image_viewer.c"

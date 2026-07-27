@@ -1,24 +1,23 @@
 /**
  * @brief  Flash 存储分区视频播放器 (tick 化)
  *
- * 使用 esp_partition_mmap 将 storage 分区映射到内存，
- * 零拷贝读取 AVI 数据，不占用 SPI2 总线。
+ * 使用 flash_media 的常驻mmap索引零拷贝读取AVI，不占用SPI2总线。
  *
  * CPU0 运行显示主循环和 Flash JPEG 解码，CPU1 专用于音频。
  */
 #include "flash_player.h"
 #include "avi.h"
+#include "flash_media.h"
 #include "mjpeg.h"
 #include "spilcd.h"
 #include "esp_lcd_jd9855.h"
-#include "esp_partition.h"
-#include "spi_flash_mmap.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include <stdio.h>
 #include <string.h>
 
 #define TAG "flash_player"
@@ -154,9 +153,9 @@ typedef struct
 {
     bool initialized;
 
-    const esp_partition_t *part;
-    spi_flash_mmap_handle_t mmap_handle;
-    const void *flash_ptr;
+    const uint8_t *flash_ptr;
+    size_t flash_size;
+    char name[FLASH_MEDIA_NAME_SIZE];
 
     AVI_INFO avi;
     mmap_file_t mf;
@@ -193,36 +192,41 @@ static fp_ctx_t g_fp = {0};
 
 /* ====== 公开 API ====== */
 
-esp_err_t flash_player_init(void)
+int flash_player_list_files(char *output, size_t output_size)
+{
+    return flash_media_list(FLASH_MEDIA_VIDEO, output, output_size);
+}
+
+const char *flash_player_name(void)
+{
+    return g_fp.name;
+}
+
+esp_err_t flash_player_start(const char *selection)
 {
     if (g_fp.initialized)
         flash_player_stop();
     memset(&g_fp, 0, sizeof(g_fp));
 
-    /* 1. 找到 storage 分区并映射 */
-    g_fp.part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "storage");
-    if (!g_fp.part)
-    {
-        ESP_LOGE(TAG, "storage partition not found");
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    esp_err_t ret = esp_partition_mmap(g_fp.part, 0, g_fp.part->size,
-                                       SPI_FLASH_MMAP_DATA,
-                                       &g_fp.flash_ptr, &g_fp.mmap_handle);
+    /* 1. 从Flash媒体索引选择AVI。 */
+    const flash_media_entry_t *entry = NULL;
+    esp_err_t ret = flash_media_resolve(
+        FLASH_MEDIA_VIDEO, selection, &entry);
     if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "mmap failed: %d", ret);
         return ret;
-    }
-    /* 从这里开始 fail 路径可统一释放 mmap、解码器、任务和缓冲。 */
+    g_fp.flash_ptr = flash_media_data(entry);
+    if (!g_fp.flash_ptr)
+        return ESP_ERR_INVALID_RESPONSE;
+    g_fp.flash_size = entry->size;
+    snprintf(g_fp.name, sizeof(g_fp.name), "%s", entry->name);
+
+    /* 从这里开始fail路径可统一释放解码器、任务和缓冲。 */
     g_fp.initialized = true;
-    ESP_LOGI(TAG, "Flash mapped: %lu bytes at %p",
-             (unsigned long)g_fp.part->size, g_fp.flash_ptr);
+    ESP_LOGI(TAG, "Selected %s: %lu bytes at %p",
+             g_fp.name, (unsigned long)g_fp.flash_size, g_fp.flash_ptr);
 
     /* 2. 解析 AVI 头 */
-    AVISTATUS ar = avi_init((const uint8_t *)g_fp.flash_ptr, g_fp.part->size, &g_fp.avi);
+    AVISTATUS ar = avi_init(g_fp.flash_ptr, g_fp.flash_size, &g_fp.avi);
     if (ar != AVI_OK)
     {
         ESP_LOGE(TAG, "AVI init failed: %d", ar);
@@ -277,7 +281,7 @@ esp_err_t flash_player_init(void)
 
     /* 4. 设置 mmap 读取器并跳到 movi */
     g_fp.mf.data = g_fp.flash_ptr;
-    g_fp.mf.size = g_fp.part->size;
+    g_fp.mf.size = g_fp.flash_size;
     g_fp.movi_pos = g_fp.avi.MoviOffset + 4;
     mmap_seek(&g_fp.mf, g_fp.movi_pos);
 
@@ -318,6 +322,11 @@ esp_err_t flash_player_init(void)
 fail:
     flash_player_stop();
     return ret;
+}
+
+esp_err_t flash_player_init(void)
+{
+    return flash_player_start("1");
 }
 
 player_ret_t flash_player_tick(void)
@@ -587,10 +596,6 @@ void flash_player_stop(void)
     }
 
     mjpeg_decoder_deinit();
-
-    if (g_fp.mmap_handle)
-        spi_flash_munmap(g_fp.mmap_handle);
-    g_fp.mmap_handle = 0;
 
     for (int i = 0; i < 2; i++)
     {

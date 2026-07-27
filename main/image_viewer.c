@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "flash_media.h"
 #include "media_catalog.h"
 #include "mjpeg.h"
 #include "sd_card.h"
@@ -40,9 +41,11 @@ typedef struct
 {
     image_phase_t phase;
     FILE *file;
-    uint8_t *jpeg;
+    uint8_t *owned_jpeg;
+    const uint8_t *jpeg;
     uint16_t *frame;
     uint16_t *strip;
+    bool from_flash;
     size_t file_size;
     size_t bytes_read;
     uint32_t width;
@@ -62,10 +65,11 @@ static void release_resources(void)
 {
     if (s_image.file)
         fclose(s_image.file);
-    heap_caps_free(s_image.jpeg);
+    heap_caps_free(s_image.owned_jpeg);
     heap_caps_free(s_image.frame);
     heap_caps_free(s_image.strip);
     s_image.file = NULL;
+    s_image.owned_jpeg = NULL;
     s_image.jpeg = NULL;
     s_image.frame = NULL;
     s_image.strip = NULL;
@@ -143,6 +147,20 @@ int image_viewer_list_files(char *output, size_t output_size)
     return media_catalog_list(MEDIA_IMAGE, output, output_size);
 }
 
+int image_viewer_list_flash_files(char *output, size_t output_size)
+{
+    return flash_media_list(FLASH_MEDIA_IMAGE, output, output_size);
+}
+
+static esp_err_t allocate_display_buffers(void)
+{
+    s_image.frame = heap_caps_aligned_alloc(
+        64, IMAGE_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+    s_image.strip = heap_caps_aligned_alloc(
+        64, IMAGE_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    return s_image.frame && s_image.strip ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
 esp_err_t image_viewer_start(const char *selection)
 {
     image_viewer_cancel();
@@ -187,13 +205,11 @@ esp_err_t image_viewer_start(const char *selection)
     }
 
     s_image.file_size = (size_t)size;
-    s_image.jpeg = heap_caps_aligned_alloc(
+    s_image.owned_jpeg = heap_caps_aligned_alloc(
         64, s_image.file_size, MALLOC_CAP_SPIRAM);
-    s_image.frame = heap_caps_aligned_alloc(
-        64, IMAGE_FRAME_BYTES, MALLOC_CAP_SPIRAM);
-    s_image.strip = heap_caps_aligned_alloc(
-        64, IMAGE_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    if (!s_image.jpeg || !s_image.frame || !s_image.strip)
+    s_image.jpeg = s_image.owned_jpeg;
+    if (!s_image.owned_jpeg ||
+        allocate_display_buffers() != ESP_OK)
     {
         release_resources();
         show_error("OUT OF MEMORY");
@@ -203,6 +219,49 @@ esp_err_t image_viewer_start(const char *selection)
     s_image.started_at = esp_timer_get_time();
     s_image.phase = PHASE_READ;
     ESP_LOGI(TAG, "Loading %s (%lu bytes)", s_image.name,
+             (unsigned long)s_image.file_size);
+    return ESP_OK;
+}
+
+esp_err_t image_viewer_start_flash(const char *selection)
+{
+    image_viewer_cancel();
+    s_image.from_flash = true;
+
+    const flash_media_entry_t *entry = NULL;
+    esp_err_t ret = flash_media_resolve(
+        FLASH_MEDIA_IMAGE, selection, &entry);
+    if (ret != ESP_OK)
+    {
+        show_error(ret == ESP_ERR_NOT_FOUND
+                       ? "FILE NOT FOUND"
+                       : "FLASH INDEX ERROR");
+        return ret;
+    }
+    if (entry->size == 0 || entry->size > IMAGE_MAX_FILE_SIZE)
+    {
+        show_error("MAX FILE 1MB");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    s_image.jpeg = flash_media_data(entry);
+    if (!s_image.jpeg)
+    {
+        show_error("FLASH READ ERROR");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    snprintf(s_image.name, sizeof(s_image.name), "%s", entry->name);
+    s_image.file_size = entry->size;
+    if (allocate_display_buffers() != ESP_OK)
+    {
+        release_resources();
+        show_error("OUT OF MEMORY");
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_image.started_at = esp_timer_get_time();
+    s_image.phase = PHASE_VALIDATE;
+    ESP_LOGI(TAG, "Loading Flash %s (%lu bytes)", s_image.name,
              (unsigned long)s_image.file_size);
     return ESP_OK;
 }
@@ -222,7 +281,7 @@ image_viewer_state_t image_viewer_tick(void)
         size_t chunk = remaining > IMAGE_READ_CHUNK
                            ? IMAGE_READ_CHUNK
                            : remaining;
-        size_t read = fread(s_image.jpeg + s_image.bytes_read, 1,
+        size_t read = fread(s_image.owned_jpeg + s_image.bytes_read, 1,
                             chunk, s_image.file);
         s_image.bytes_read += read;
         if (read != chunk)
@@ -269,7 +328,8 @@ image_viewer_state_t image_viewer_tick(void)
             decoded_height != s_image.height)
             return fail_loading(ESP_ERR_INVALID_RESPONSE, "SIZE MISMATCH");
 
-        heap_caps_free(s_image.jpeg);
+        heap_caps_free(s_image.owned_jpeg);
+        s_image.owned_jpeg = NULL;
         s_image.jpeg = NULL;
         s_image.offset_x = (IMAGE_MAX_WIDTH - s_image.width) / 2;
         s_image.offset_y = (IMAGE_MAX_HEIGHT - s_image.height) / 2;
@@ -375,6 +435,11 @@ void image_viewer_cancel(void)
 const char *image_viewer_name(void)
 {
     return s_image.name;
+}
+
+const char *image_viewer_command(void)
+{
+    return s_image.from_flash ? "FIMG" : "IMG";
 }
 
 uint32_t image_viewer_width(void)

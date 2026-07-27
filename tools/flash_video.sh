@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
-#  将 AVI 视频烧录到 Flash storage 分区 (内存映射播放)
+#  将多个 AVI/JPEG 按参数顺序打包并烧录到 Flash storage 分区
 #
-#  用法: ./flash_video.sh              (使用 flash_video.conf 中的配置)
-#        ./flash_video.sh video.avi    (指定文件)
+#  用法: ./flash_video.sh                         (使用配置中的 FILES/FILE)
+#        ./flash_video.sh a.avi b.jpg c.avi       (按给定顺序打包)
 #
 #  配置: flash_video.conf (同目录)
 # ============================================================
@@ -22,20 +22,31 @@ if [[ -f "$CONFIG" ]]; then
 fi
 
 # ---- 参数覆盖配置 ----
-AVI_FILE="${1:-$FILE}"
-if [[ -z "$AVI_FILE" ]]; then
-    echo "用法: $0 video.avi"
-    echo "      或在 $CONFIG 中设置 FILE="
+MEDIA_FILES=()
+if [[ $# -gt 0 ]]; then
+    MEDIA_FILES=("$@")
+elif declare -p FILES >/dev/null 2>&1; then
+    MEDIA_FILES=("${FILES[@]}")
+elif [[ -n "$FILE" ]]; then
+    MEDIA_FILES=("$FILE")
+fi
+
+if [[ ${#MEDIA_FILES[@]} -eq 0 ]]; then
+    echo "用法: $0 video1.avi image1.jpg video2.avi ..."
+    echo "      或在 $CONFIG 中设置 FILES=(...)"
     exit 1
 fi
-if [[ ! -f "$AVI_FILE" ]]; then
-    echo "[ERROR] 文件不存在: $AVI_FILE"
-    exit 1
-fi
+for media_file in "${MEDIA_FILES[@]}"; do
+    if [[ ! -f "$media_file" ]]; then
+        echo "[ERROR] 文件不存在: $media_file"
+        exit 1
+    fi
+done
 
 # ---- 获取 storage 偏移 (从 partition-table.bin) ----
 PART_BIN="$PROJECT_DIR/build/partition_table/partition-table.bin"
 STORAGE_OFFSET_HEX="0x110000"  # 默认
+MAX_SIZE=$((14 * 1024 * 1024))
 if [[ -f "$PART_BIN" ]]; then
     # gen_esp32part.py 输出各分区信息
     PART_TOOL="$IDF_PATH/components/partition_table/gen_esp32part.py"
@@ -50,16 +61,23 @@ if [[ -f "$PART_BIN" ]]; then
 fi
 echo "[INFO] storage 偏移: $STORAGE_OFFSET_HEX"
 
-# ---- 校验 ----
-FILE_SIZE=$(stat -c%s "$AVI_FILE")
-MAX_SIZE=$((14 * 1024 * 1024))
-if [[ $FILE_SIZE -gt $MAX_SIZE ]]; then
-    echo "[ERROR] 文件太大: $FILE_SIZE > 14MB"
+# ---- 生成带索引的顺序媒体镜像 ----
+PACKER="$SCRIPT_DIR/flash_media_pack.py"
+if [[ ! -f "$PACKER" ]]; then
+    echo "[ERROR] 缺少打包工具: $PACKER"
     exit 1
 fi
 
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf -- "$TEMP_DIR"' EXIT
+PACKED_BIN="$TEMP_DIR/flash_media.bin"
+python3 "$PACKER" --max-size "$MAX_SIZE" \
+    "$PACKED_BIN" "${MEDIA_FILES[@]}"
+PACKED_SIZE=$(stat -c%s "$PACKED_BIN")
+
 echo "============================================"
-echo "  视频: $AVI_FILE ($FILE_SIZE bytes)"
+echo "  文件数: ${#MEDIA_FILES[@]}"
+echo "  镜像大小: $PACKED_SIZE bytes"
 echo "  Flash 偏移: $STORAGE_OFFSET_HEX"
 echo "============================================"
 
@@ -70,6 +88,8 @@ python3 -m esptool \
     --before default_reset \
     --after hard_reset \
     write_flash \
-    "$STORAGE_OFFSET_HEX" "$AVI_FILE"
+    "$STORAGE_OFFSET_HEX" "$PACKED_BIN"
 
-echo "[OK] 烧录完成! 重启 ESP32 即可播放"
+echo "[OK] 多媒体烧录完成!"
+echo "     Flash视频: VLIST / VPLAY <n>"
+echo "     Flash图片: FIMGLIST / FIMG <n>"
