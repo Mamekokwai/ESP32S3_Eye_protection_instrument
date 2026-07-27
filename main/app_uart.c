@@ -36,9 +36,9 @@
 #define TAG "uart"
 
 /* ---- UART1 仅 RX ---- */
-#define UART_PORT    UART_NUM_1
-#define UART_RX_PIN  GPIO_NUM_44
-#define UART_BAUD    115200
+#define UART_PORT UART_NUM_1
+#define UART_RX_PIN GPIO_NUM_44
+#define UART_BAUD 115200
 #define UART_BUF_SIZE 512
 
 /* ---- 指令缓冲 ---- */
@@ -372,14 +372,19 @@ static void cmd_handle(const char *cmd)
     if (strncasecmp(cmd, "VOL ", 4) == 0)
     {
         int v = atoi(cmd + 4);
-        if (v < 0) v = 0;
-        if (v > 100) v = 100;
+        if (v < 0)
+            v = 0;
+        if (v > 100)
+            v = 100;
         esp_err_t ret = audio_player_set_volume(v);
-        if (ret == ESP_OK) {
+        if (ret == ESP_OK)
+        {
             char r[32];
             snprintf(r, sizeof(r), "OK VOL %d", v);
             uart_send_str(r);
-        } else {
+        }
+        else
+        {
             char r[48];
             snprintf(r, sizeof(r), "ERR VOL %s", esp_err_to_name(ret));
             uart_send_str(r);
@@ -595,7 +600,8 @@ void app_uart_inject(const char *cmd)
 {
     /* 注入指令到缓冲区, 下一个 tick 自动解析 */
     size_t len = strlen(cmd);
-    if (len >= sizeof(g_line)) len = sizeof(g_line) - 1;
+    if (len >= sizeof(g_line))
+        len = sizeof(g_line) - 1;
     memcpy(g_line, cmd, len);
     g_pos = len;
 }

@@ -56,7 +56,7 @@ GPIO1 曾同时作为 LCD TE 输入和旧 LED 输出，输出模式破坏 LCD �
 `flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；Flash 视频使用双 40 行条带，TF 视频使用单 160 行条带。
 
 显示状态和音频状态相互独立：视频/图片共用 LCD，二者互斥；Flash/TF JPEG 解码固定 CPU0，音频固定 CPU1，不做音画同步。ES8311/I2S 固定 44.1kHz，其他输入采样率由音频任务软件转换，避免播放期间 I2C 重配。
-`VOL` 使用 PCM 软件音量，不写 ES8311 I2C 寄存器；`AMUTE` 通过 GPIO2 关闭功放。
+`VOL` 默认通过 I2C 写 ES8311 DAC 音量寄存器；`main/audio.h` 的 `AUDIO_VOLUME_MODE` 可切回 PCM 软件音量；`AMUTE` 通过 GPIO2 关闭功放。
 
 ### 5. 传输与运行速度优化
 

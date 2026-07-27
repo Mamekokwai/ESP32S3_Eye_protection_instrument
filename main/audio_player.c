@@ -364,8 +364,9 @@ esp_err_t audio_player_set_volume(int vol)
     audio_lock();
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
-    g_ap.volume = vol;
     esp_err_t ret = audio_set_volume(vol);
+    if (ret == ESP_OK)
+        g_ap.volume = vol;
     audio_unlock();
     return ret;
 }

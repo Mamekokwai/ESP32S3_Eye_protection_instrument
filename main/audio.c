@@ -31,6 +31,11 @@
 #define RESAMPLE_BUFFER_SAMPLES  512
 #define AUDIO_AMP_MUTE_GPIO GPIO_NUM_2
 
+#if AUDIO_VOLUME_MODE != AUDIO_VOLUME_MODE_SOFTWARE && \
+    AUDIO_VOLUME_MODE != AUDIO_VOLUME_MODE_ES8311
+#error "Invalid AUDIO_VOLUME_MODE"
+#endif
+
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;
 static esp_codec_dev_handle_t codec_dev = NULL;
 static const audio_codec_data_if_t *data_if = NULL;
@@ -47,6 +52,36 @@ static bool s_amp_ready = false;
 static bool s_amp_enabled = false;
 
 // ---- 内部函数 ----
+
+/*
+ * esp_codec_dev 默认音量曲线：
+ *   0  -> -96 dB
+ *   1  -> -49.5 dB
+ *   100 -> 0 dB
+ *
+ * 直接调用 codec_if->set_vol()，确保 ES8311 I2C 写入错误能够传回，
+ * 避免 esp_codec_dev_set_out_vol() 丢弃底层 set_vol 返回值。
+ */
+static float volume_percent_to_db(int volume)
+{
+    if (volume == 0)
+        return -96.0f;
+    return -50.0f + volume * 0.5f;
+}
+
+static esp_err_t set_es8311_hardware_volume(int volume)
+{
+    if (codec_if == NULL || codec_if->set_vol == NULL)
+        return ESP_ERR_NOT_SUPPORTED;
+
+    int ret = codec_if->set_vol(codec_if, volume_percent_to_db(volume));
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "ES8311 volume I2C write failed: volume=%d ret=%d",
+                 volume, ret);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
 
 static esp_err_t init_audio_amp(void)
 {
@@ -254,15 +289,28 @@ static esp_err_t init_es8311_codec(void)
         return ret;
     }
 
-    /* Codec 只在启动时设为固定满幅，运行期音量由 PCM 软件缩放。 */
-    ret = esp_codec_dev_set_out_vol(codec_dev, 100);
-    if (ret != ESP_CODEC_DEV_OK) {
+    /*
+     * 硬件模式直接设置默认音量；软件模式把 ES8311 固定为满幅，
+     * 后续仅缩放 PCM，保留原软件音量行为。
+     */
+#if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_ES8311
+    ret = set_es8311_hardware_volume(current_volume);
+#else
+    ret = set_es8311_hardware_volume(100);
+#endif
+    if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set initial volume: %d", ret);
-        return ESP_FAIL;
+        return ret;
     }
     current_sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
-    ESP_LOGI(TAG, "ES8311 codec ready: %d Hz, 16-bit mono, software volume=%d",
-             current_sample_rate, current_volume);
+    ESP_LOGI(TAG, "ES8311 codec ready: %d Hz, 16-bit mono, volume=%d mode=%s",
+             current_sample_rate, current_volume,
+#if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_ES8311
+             "ES8311-I2C"
+#else
+             "PCM-software"
+#endif
+    );
     return ESP_OK;
 }
 
@@ -383,7 +431,11 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
     if (sample_rate < 8000 || sample_rate > 48000)
         return ESP_ERR_INVALID_ARG;
 
+#if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_SOFTWARE
     const int volume = current_volume;
+#else
+    const int volume = 100;
+#endif
     if (sample_rate == AUDIO_OUTPUT_SAMPLE_RATE && channels == 1 &&
         volume == 100) {
         int bytes = (int)(num_samples * sizeof(int16_t));
@@ -418,7 +470,11 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
             int32_t second = read_mono_sample(samples, next, channels);
             int64_t delta = (int64_t)(second - first) * fraction;
             int32_t value = first + (int32_t)(delta >> 32);
+#if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_SOFTWARE
             output[i] = (int16_t)(value * volume / 100);
+#else
+            output[i] = (int16_t)value;
+#endif
             position += step;
         }
 
@@ -437,8 +493,17 @@ esp_err_t audio_set_volume(int vol)
         return ESP_ERR_INVALID_STATE;
     if (vol < 0 || vol > 100)
         return ESP_ERR_INVALID_ARG;
+
+#if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_ES8311
+    esp_err_t ret = set_es8311_hardware_volume(vol);
+    if (ret != ESP_OK)
+        return ret;
+    current_volume = vol;
+    ESP_LOGI(TAG, "ES8311 I2C volume=%d", vol);
+#else
     current_volume = vol;
     ESP_LOGI(TAG, "Software volume=%d", vol);
+#endif
     return ESP_OK;
 }
 

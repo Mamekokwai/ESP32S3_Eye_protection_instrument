@@ -4,6 +4,15 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
+/*
+ * 音量控制方式（编译期切换）：
+ *   AUDIO_VOLUME_MODE_ES8311  — VOL 通过 I2C 写 ES8311 DAC 音量寄存器
+ *   AUDIO_VOLUME_MODE_SOFTWARE — VOL 在 PCM 输出前进行软件幅度缩放
+ */
+#define AUDIO_VOLUME_MODE_SOFTWARE 0
+#define AUDIO_VOLUME_MODE_ES8311   1
+#define AUDIO_VOLUME_MODE          AUDIO_VOLUME_MODE_ES8311
+
 /**
  * @brief 初始化音频系统（I2C、I2S、ES8311 和 GPIO2 功放控制）
  * @return ESP_OK 成功
@@ -45,9 +54,9 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
                           int sample_rate, int channels);
 
 /**
- * @brief 设置 PCM 软件音量，运行期不访问 ES8311 I2C
+ * @brief 按 AUDIO_VOLUME_MODE 设置 ES8311 硬件音量或 PCM 软件音量
  * @param vol 音量 0~100
- * @return ESP_OK 成功
+ * @return ESP_OK 成功；硬件模式下 I2C 写入失败返回 ESP_FAIL
  */
 esp_err_t audio_set_volume(int vol);
 

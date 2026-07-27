@@ -223,7 +223,7 @@ TF 视频每 100 帧输出一次 `VID profile`，统计解码等待、SD 读取�
 ## 注意事项
 
 - ES8311/I2S 固定为 44.1kHz、16-bit 单声道；16kHz PCM 和 8–48kHz MP3 在 CPU1 内线性转换到 44.1kHz，播放期间禁止 `esp_codec_dev_close/open`
-- `VOL 0-100` 在 PCM 输出前做软件幅度缩放，不在运行期通过 I2C 修改 ES8311 音量寄存器；`AMUTE` 直接拉低 GPIO2
+- `VOL 0-100` 默认通过 I2C 修改 ES8311 DAC 音量寄存器；`main/audio.h` 的 `AUDIO_VOLUME_MODE` 可切回 PCM 软件幅度缩放；`AMUTE` 直接拉低 GPIO2
 - GPIO2 为功放 MUTE/使能脚：播放且未静音时拉高，停止、错误或 `AMUTE` 时拉低；禁止恢复心跳 LED
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - TF 卡使用 SDMMC 外设，LCD 使用 i80 外设，两者不争用同一外设总线
