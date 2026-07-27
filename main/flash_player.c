@@ -4,7 +4,7 @@
  * 使用 esp_partition_mmap 将 storage 分区映射到内存，
  * 零拷贝读取 AVI 数据，不占用 SPI2 总线。
  *
- * 双核流水线: Core0 (主循环 tick) + Core1 (JPEG 解码任务)
+ * CPU0 运行显示主循环和 Flash JPEG 解码，CPU1 专用于音频。
  */
 #include "flash_player.h"
 #include "avi.h"
@@ -242,7 +242,8 @@ esp_err_t flash_player_init(void)
     s_q = xQueueCreate(1, sizeof(decode_job_t));
     s_done = xSemaphoreCreateBinary();
     if (!s_q || !s_done ||
-        xTaskCreatePinnedToCore(decode_task, "jpeg_f", 4096, NULL, 5, &s_task, 1) != pdPASS)
+        xTaskCreatePinnedToCore(decode_task, "jpeg_f", 4096, NULL, 5,
+                                &s_task, 0) != pdPASS)
     {
         ret = ESP_ERR_NO_MEM;
         goto fail;

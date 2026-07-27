@@ -20,7 +20,10 @@
 
 #define LCD_CS2 GPIO_NUM_18                 /* 右眼屏片选 (和 CS1=IO17 配合) */
 #define LCD_DUAL 1                          /* 0=单屏测试, 1=双屏同画面 */
-#define LCD_TEXT_PCLK_HZ (40 * 1000 * 1000) // 屏幕通信频率
+#define LCD_TEXT_PCLK_HZ (30 * 1000 * 1000) // 屏幕通信频率,>20MHZ保持30fps
+
+#define AUDIO_SCL GPIO_NUM_5 /* 右眼屏片选 (和 CS1=IO17 配合) */
+#define AUDIO_SDA GPIO_NUM_4 /* 右眼屏片选 (和 CS1=IO17 配合) */
 
 #define TAG "spilcd"
 
@@ -66,6 +69,8 @@ esp_err_t spilcd_init(void)
 #if LCD_DUAL
     gpio_set_level(LCD_CS, 0);
     gpio_set_level(LCD_CS2, 0);
+    // gpio_set_level(AUDIO_SCL, 0);
+    // gpio_set_level(AUDIO_SDA, 0);
     ESP_LOGI(TAG, "Dual LCD: CS1=IO%d, CS2=IO%d (both manual LOW)",
              LCD_CS, LCD_CS2);
 #else
@@ -165,7 +170,8 @@ void spilcd_display_dir(uint8_t dir)
     dir &= 3;
     spilcddev.dir = dir;
     /* 统一使用标准 MADCTL 组合，避免 VID/IMG 分条窗口在旋转时错位。 */
-    switch (dir) {
+    switch (dir)
+    {
     case 0: /* 默认 */
         spilcddev.width = spilcddev.pheight;
         spilcddev.height = spilcddev.pwidth;

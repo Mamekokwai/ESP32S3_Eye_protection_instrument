@@ -2,6 +2,7 @@
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_common.h"
+#include "driver/gpio.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_log.h"
@@ -23,10 +24,12 @@
 #define I2C_ES8311_PORT   I2C_NUM_1
 #define I2C_ES8311_SDA    GPIO_NUM_4
 #define I2C_ES8311_SCL    GPIO_NUM_5
-#define ES8311_ADDR        0x30      // (0x18 << 1)
+#define ES8311_ADDR_7BIT   0x18
+#define ES8311_ADDR        (ES8311_ADDR_7BIT << 1)
 
-#define SAMPLE_RATE        16000
-#define MUTE_PIN           0x8000    // XL9555 P1.7
+#define AUDIO_OUTPUT_SAMPLE_RATE 44100
+#define RESAMPLE_BUFFER_SAMPLES  512
+#define AUDIO_AMP_MUTE_GPIO GPIO_NUM_2
 
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;
 static esp_codec_dev_handle_t codec_dev = NULL;
@@ -36,12 +39,36 @@ static const audio_codec_gpio_if_t *gpio_if = NULL;
 static const audio_codec_if_t *codec_if = NULL;
 static i2s_chan_handle_t tx_handle = NULL;
 static i2s_chan_handle_t rx_handle = NULL;
-static int current_sample_rate = SAMPLE_RATE;
+static int current_sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
 static int current_volume = 70;
 /* codec_dev 对象创建成功不代表 ES8311 已经应答并打开。 */
 static bool s_audio_ready = false;
+static bool s_amp_ready = false;
+static bool s_amp_enabled = false;
 
 // ---- 内部函数 ----
+
+static esp_err_t init_audio_amp(void)
+{
+    const gpio_config_t config = {
+        .pin_bit_mask = BIT64(AUDIO_AMP_MUTE_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    esp_err_t ret = gpio_config(&config);
+    if (ret != ESP_OK)
+        return ret;
+
+    ret = gpio_set_level(AUDIO_AMP_MUTE_GPIO, 0);
+    if (ret != ESP_OK)
+        return ret;
+    s_amp_ready = true;
+    s_amp_enabled = false;
+    ESP_LOGI(TAG, "Amplifier MUTE: GPIO2=0 (speaker off)");
+    return ESP_OK;
+}
 
 static esp_err_t init_i2c_bus(void)
 {
@@ -83,7 +110,7 @@ static esp_err_t init_i2s_channels(void)
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = {
-            .sample_rate_hz = SAMPLE_RATE,
+            .sample_rate_hz = AUDIO_OUTPUT_SAMPLE_RATE,
             .clk_src = I2S_CLK_SRC_DEFAULT,
             .mclk_multiple = I2S_MCLK_MULTIPLE_256,
         },
@@ -128,19 +155,29 @@ static esp_err_t init_i2s_channels(void)
 
 static esp_err_t init_es8311_codec(void)
 {
-    // XL9555 初始化（通过 I2C0）并开启扬声器
-    /* xl9555_init removed */
-    /* mute via CA51F352P4 */
-    ESP_LOGI(TAG, "MUTE pin set to 1 (speaker enabled)");
-
+    /* 等待功放和 codec 电源稳定；GPIO2 此时保持低电平。 */
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // I2C 总线（I2C1 → ES8311）
-    ESP_ERROR_CHECK(init_i2c_bus());
+    esp_err_t ret = init_i2c_bus();
+    if (ret != ESP_OK)
+        return ret;
     vTaskDelay(pdMS_TO_TICKS(50));
 
+    ret = i2c_master_probe(i2c_bus_handle, ES8311_ADDR_7BIT, 100);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "ES8311 not found at I2C address 0x%02X: %s; check PVDD/DGND and SDA/SCL pull-ups",
+                 ES8311_ADDR_7BIT, esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "ES8311 detected at I2C address 0x%02X",
+             ES8311_ADDR_7BIT);
+
     // I2S 通道
-    ESP_ERROR_CHECK(init_i2s_channels());
+    ret = init_i2s_channels();
+    if (ret != ESP_OK)
+        return ret;
 
     // I2S 数据接口
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -202,33 +239,29 @@ static esp_err_t init_es8311_codec(void)
         return ESP_FAIL;
     }
 
-    /*
-     * Sample-rate changes use esp_codec_dev_close/open to reconfigure I2S.
-     * Keep ES8311 awake across close so open can program the new clock
-     * registers before codec->enable(true) is called.
-     */
-    if (esp_codec_set_disable_when_closed(codec_dev, false) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to keep ES8311 enabled across format changes");
-        return ESP_FAIL;
-    }
-
     // 打开设备
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = 16,
         .channel = 1,
         .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
-        .sample_rate = SAMPLE_RATE,
+        .sample_rate = AUDIO_OUTPUT_SAMPLE_RATE,
         .mclk_multiple = 0,
     };
 
-    esp_err_t ret = esp_codec_dev_open(codec_dev, &fs);
+    ret = esp_codec_dev_open(codec_dev, &fs);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open codec device: %d", ret);
         return ret;
     }
 
-    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(codec_dev, 70));
-    ESP_LOGI(TAG, "ES8311 codec initialized");
+    ret = esp_codec_dev_set_out_vol(codec_dev, current_volume);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Failed to set initial volume: %d", ret);
+        return ESP_FAIL;
+    }
+    current_sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
+    ESP_LOGI(TAG, "ES8311 codec ready: %d Hz, 16-bit mono, volume=%d",
+             current_sample_rate, current_volume);
     return ESP_OK;
 }
 
@@ -237,12 +270,42 @@ static esp_err_t init_es8311_codec(void)
 esp_err_t audio_init(void)
 {
     s_audio_ready = false;
-    esp_err_t ret = init_es8311_codec();
+    esp_err_t ret = init_audio_amp();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Amplifier GPIO2 init failed: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = init_es8311_codec();
     if (ret == ESP_OK)
         s_audio_ready = true;
     else
         ESP_LOGE(TAG, "Audio unavailable, continuing without audio: %s", esp_err_to_name(ret));
     return ret;
+}
+
+esp_err_t audio_amp_set_enabled(bool enabled)
+{
+    if (!s_amp_ready)
+        return ESP_ERR_INVALID_STATE;
+
+    esp_err_t ret = gpio_set_level(
+        AUDIO_AMP_MUTE_GPIO, enabled ? 1 : 0);
+    if (ret != ESP_OK)
+        return ret;
+
+    if (s_amp_enabled != enabled) {
+        ESP_LOGI(TAG, "Amplifier MUTE: GPIO2=%d (speaker %s)",
+                 enabled ? 1 : 0, enabled ? "on" : "off");
+    }
+    s_amp_enabled = enabled;
+    return ESP_OK;
+}
+
+bool audio_is_ready(void)
+{
+    return s_audio_ready;
 }
 
 esp_err_t audio_play(const uint8_t *data, size_t len)
@@ -256,6 +319,7 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
     int total_written = 0;
     const int chunk_size = 512;
 
+    int retries = 0;
     while (total_written < (int)len) {
         int remaining = (int)len - total_written;
         int to_write = (remaining > chunk_size) ? chunk_size : remaining;
@@ -263,8 +327,14 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
         int ret = esp_codec_dev_write(codec_dev, (void *)(data + total_written), to_write);
         if (ret == ESP_CODEC_DEV_OK) {
             total_written += to_write;
+            retries = 0;
         } else {
-            ESP_LOGW(TAG, "Write retry, ret=%d", ret);
+            if (++retries >= 3) {
+                ESP_LOGE(TAG, "Audio write failed after %d retries: %d",
+                         retries, ret);
+                return ESP_FAIL;
+            }
+            ESP_LOGW(TAG, "Audio write retry %d/3, ret=%d", retries, ret);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
@@ -275,37 +345,26 @@ esp_err_t audio_play(const uint8_t *data, size_t len)
 
 esp_err_t audio_set_sample_rate(int sample_rate)
 {
-    if (!s_audio_ready || codec_dev == NULL) {
+    if (!s_audio_ready || codec_dev == NULL)
         return ESP_ERR_INVALID_STATE;
-    }
-    if (sample_rate < 8000 || sample_rate > 48000) {
+    if (sample_rate < 8000 || sample_rate > 48000)
         return ESP_ERR_INVALID_ARG;
-    }
-    if (sample_rate == current_sample_rate) {
-        return ESP_OK;
-    }
 
-    esp_codec_dev_sample_info_t fs = {
-        .bits_per_sample = 16,
-        .channel = 1,
-        .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
-        .sample_rate = (uint32_t)sample_rate,
-        .mclk_multiple = 0,
-    };
-    int ret = esp_codec_dev_close(codec_dev);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Cannot stop I2S for sample-rate change: %d", ret);
-        return ESP_FAIL;
-    }
-    ret = esp_codec_dev_open(codec_dev, &fs);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Cannot set sample rate to %d Hz: %d", sample_rate, ret);
-        return ESP_FAIL;
-    }
-    current_sample_rate = sample_rate;
-    esp_codec_dev_set_out_vol(codec_dev, current_volume);
-    ESP_LOGI(TAG, "Audio output: %d Hz, 16-bit mono", sample_rate);
+    /*
+     * ES8311 固定在 44.1kHz，不在播放期间 close/open codec。
+     * 输入采样率由 audio_write_pcm() 软件转换。
+     */
     return ESP_OK;
+}
+
+static int16_t read_mono_sample(const int16_t *samples, size_t index,
+                                int channels)
+{
+    if (channels == 1)
+        return samples[index];
+    int32_t mixed = (int32_t)samples[index * 2] +
+                    samples[index * 2 + 1];
+    return (int16_t)(mixed / 2);
 }
 
 esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
@@ -320,27 +379,52 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
     if (channels != 1 && channels != 2) {
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t ret = audio_set_sample_rate(sample_rate);
-    if (ret != ESP_OK) {
-        return ret;
+    if (sample_rate < 8000 || sample_rate > 48000)
+        return ESP_ERR_INVALID_ARG;
+
+    if (sample_rate == AUDIO_OUTPUT_SAMPLE_RATE && channels == 1) {
+        int bytes = (int)(num_samples * sizeof(int16_t));
+        return esp_codec_dev_write(codec_dev, (void *)samples, bytes) ==
+                       ESP_CODEC_DEV_OK
+                   ? ESP_OK
+                   : ESP_FAIL;
     }
 
-    size_t bytes = num_samples * sizeof(int16_t);
-    if (channels == 2) {
-        static int16_t mono_buf[1152];
-        if (num_samples > sizeof(mono_buf) / sizeof(mono_buf[0])) {
-            return ESP_ERR_INVALID_SIZE;
+    static int16_t output[RESAMPLE_BUFFER_SAMPLES];
+    const uint64_t step = ((uint64_t)sample_rate << 32) /
+                          AUDIO_OUTPUT_SAMPLE_RATE;
+    const size_t output_count =
+        ((uint64_t)num_samples * AUDIO_OUTPUT_SAMPLE_RATE +
+         sample_rate - 1) /
+        sample_rate;
+    uint64_t position = 0;
+    size_t produced = 0;
+
+    while (produced < output_count) {
+        size_t chunk = output_count - produced;
+        if (chunk > RESAMPLE_BUFFER_SAMPLES)
+            chunk = RESAMPLE_BUFFER_SAMPLES;
+
+        for (size_t i = 0; i < chunk; i++) {
+            size_t index = (size_t)(position >> 32);
+            uint32_t fraction = (uint32_t)position;
+            if (index >= num_samples)
+                index = num_samples - 1;
+            size_t next = index + 1 < num_samples ? index + 1 : index;
+            int32_t first = read_mono_sample(samples, index, channels);
+            int32_t second = read_mono_sample(samples, next, channels);
+            int64_t delta = (int64_t)(second - first) * fraction;
+            output[i] = (int16_t)(first + (delta >> 32));
+            position += step;
         }
-        for (size_t i = 0; i < num_samples; i++) {
-            int32_t mix = (int32_t)samples[i * 2] + samples[i * 2 + 1];
-            mono_buf[i] = (int16_t)(mix / 2);
-        }
-        return esp_codec_dev_write(codec_dev, mono_buf, (int)bytes) == ESP_CODEC_DEV_OK
-                   ? ESP_OK : ESP_FAIL;
-    } else {
-        return esp_codec_dev_write(codec_dev, (void *)samples, (int)bytes) == ESP_CODEC_DEV_OK
-                   ? ESP_OK : ESP_FAIL;
+
+        if (esp_codec_dev_write(codec_dev, output,
+                                (int)(chunk * sizeof(int16_t))) !=
+            ESP_CODEC_DEV_OK)
+            return ESP_FAIL;
+        produced += chunk;
     }
+    return ESP_OK;
 }
 
 esp_err_t audio_set_volume(int vol)
@@ -352,4 +436,117 @@ esp_err_t audio_set_volume(int vol)
     if (vol > 100) vol = 100;
     current_volume = vol;
     return esp_codec_dev_set_out_vol(codec_dev, vol);
+}
+
+/* ================================================================
+ * I2C 总线测试 — 持续读写 ES8311 寄存器，用于示波器观察 SCL/SDA
+ * 指令: I2CTEST  →  启停
+ * ================================================================ */
+static volatile bool s_i2c_test_run = false;
+static TaskHandle_t s_i2c_test_task = NULL;
+
+/* ---- I2C 总线恢复：手动发 9 个 SCL 脉冲，释放被锁死的 SDA ---- */
+void audio_i2c_bus_recover(void)
+{
+    int sda_before = gpio_get_level(I2C_ES8311_SDA);
+    int scl_before = gpio_get_level(I2C_ES8311_SCL);
+    ESP_LOGI(TAG, "I2C recover: SDA=%d SCL=%d (before)", sda_before, scl_before);
+
+    /* 先试推挽输出强驱高，测试脚是否被 ES8311 硬拉到地 */
+    gpio_config_t pushpull = {
+        .pin_bit_mask = BIT64(I2C_ES8311_SDA) | BIT64(I2C_ES8311_SCL),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pushpull);
+    gpio_set_level(I2C_ES8311_SDA, 1);
+    gpio_set_level(I2C_ES8311_SCL, 1);
+    esp_rom_delay_us(5);
+    int sda_pp = gpio_get_level(I2C_ES8311_SDA);
+    int scl_pp = gpio_get_level(I2C_ES8311_SCL);
+    ESP_LOGI(TAG, "I2C recover: push-pull HIGH → SDA=%d SCL=%d %s",
+             sda_pp, scl_pp,
+             (sda_pp == 1 && scl_pp == 1) ? "(free)" : "(ES8311 pulling down!)");
+
+    /* 再用开漏 + 上拉恢复 */
+    gpio_config_t io_conf = {
+        .pin_bit_mask = BIT64(I2C_ES8311_SDA) | BIT64(I2C_ES8311_SCL),
+        .mode = GPIO_MODE_OUTPUT_OD,   /* 开漏，模拟 I2C */
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+    gpio_set_level(I2C_ES8311_SDA, 1);
+    gpio_set_level(I2C_ES8311_SCL, 1);
+    esp_rom_delay_us(10);
+
+    /* 标准 I2C 恢复: SCL 发 9 个脉冲，每 2 个周期检查 SDA 是否释放 */
+    for (int i = 0; i < 9; i++) {
+        gpio_set_level(I2C_ES8311_SCL, 0);
+        esp_rom_delay_us(10);
+        gpio_set_level(I2C_ES8311_SCL, 1);
+        esp_rom_delay_us(10);
+        if (gpio_get_level(I2C_ES8311_SDA)) {
+            ESP_LOGI(TAG, "I2C recover: SDA released after %d clocks", i + 1);
+            break;
+        }
+    }
+
+    int sda_after = gpio_get_level(I2C_ES8311_SDA);
+    ESP_LOGI(TAG, "I2C recover: SDA=%d SCL=%d (after%s)",
+             sda_after, gpio_get_level(I2C_ES8311_SCL),
+             sda_after ? " - OK" : " - STILL STUCK!");
+}
+
+static void i2c_test_thread(void *arg)
+{
+    int count = 0;
+    while (s_i2c_test_run) {
+        if (ctrl_if && ctrl_if->read_reg) {
+            int val = 0;
+            int ret = ctrl_if->read_reg(ctrl_if, 0x00, 1, &val, 1);
+            if (++count % 100 == 0) {
+                ESP_LOGI(TAG, "I2CTEST %d reads, reg0x00=0x%02X, ret=%d",
+                         count, val, ret);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1)); /* ~1kHz 持续 I2C 活动 */
+    }
+    ESP_LOGI(TAG, "I2CTEST stopped (%d reads)", count);
+    s_i2c_test_task = NULL;
+    vTaskDelete(NULL);
+}
+
+void audio_i2c_test_start(void)
+{
+    if (s_i2c_test_run) {
+        ESP_LOGI(TAG, "I2CTEST already running");
+        return;
+    }
+    if (ctrl_if == NULL) {
+        ESP_LOGE(TAG, "I2CTEST ERR no I2C ctrl interface");
+        return;
+    }
+    s_i2c_test_run = true;
+    xTaskCreatePinnedToCore(i2c_test_thread, "i2ctest", 3072,
+                            NULL, 1, &s_i2c_test_task, 0);
+    ESP_LOGI(TAG, "I2CTEST started (1kHz read reg0x00)");
+}
+
+void audio_i2c_test_stop(void)
+{
+    if (!s_i2c_test_run) {
+        ESP_LOGI(TAG, "I2CTEST not running");
+        return;
+    }
+    s_i2c_test_run = false;
+    ESP_LOGI(TAG, "I2CTEST stopping...");
+}
+
+bool audio_i2c_test_is_running(void)
+{
+    return s_i2c_test_run;
 }

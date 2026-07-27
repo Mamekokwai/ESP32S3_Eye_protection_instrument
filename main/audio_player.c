@@ -74,6 +74,11 @@ static void audio_unlock(void)
 
 static esp_err_t audio_player_init_locked(const char *filename)
 {
+    if (!audio_is_ready()) {
+        ESP_LOGE(TAG, "ES8311 is not ready");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     int volume = g_ap.volume ? g_ap.volume : 70;
     bool muted = g_ap.muted;
     if (g_ap.initialized)
@@ -118,9 +123,14 @@ static esp_err_t audio_player_init_locked(const char *filename)
             audio_player_stop_locked();
             return ESP_ERR_NO_MEM;
         }
-    } else if (audio_set_sample_rate(16000) != ESP_OK) {
+    }
+
+    esp_err_t amp_ret = audio_amp_set_enabled(!g_ap.muted);
+    if (amp_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot enable amplifier: %s",
+                 esp_err_to_name(amp_ret));
         audio_player_stop_locked();
-        return ESP_FAIL;
+        return amp_ret;
     }
 
     ESP_LOGI(TAG, "Init %s: %s (%lu bytes)",
@@ -172,9 +182,6 @@ static player_ret_t audio_player_tick_locked(void)
             if (result == 2 || result == -5) {
                 uint32_t rate = mp3_decoder_sample_rate(g_ap.decoder);
                 uint8_t channels = mp3_decoder_channels(g_ap.decoder);
-                if (audio_set_sample_rate((int)rate) != ESP_OK) {
-                    return PLAYER_ERROR;
-                }
                 ESP_LOGI(TAG, "MP3 stream: %lu Hz, %u ch, %lu kbps",
                          (unsigned long)rate, channels,
                          (unsigned long)mp3_decoder_bitrate(g_ap.decoder));
@@ -216,7 +223,7 @@ static player_ret_t audio_player_tick_locked(void)
     }
 
     /* 读一块数据 */
-    uint8_t buf[CHUNK_SIZE];
+    int16_t buf[CHUNK_SIZE / sizeof(int16_t)];
     FSIZE_t remain = g_ap.file_size - g_ap.pos;
     size_t to_read = (remain < CHUNK_SIZE) ? (size_t)remain : CHUNK_SIZE;
     UINT br;
@@ -229,7 +236,9 @@ static player_ret_t audio_player_tick_locked(void)
     /* 写入 I2S — 直接调用 audio_play 的内部机制 */
     /* audio_play 是阻塞的, 但小块数据写入很快 (~2KB / 32KBps = ~64ms 的音频) */
     /* 实际上 2KB PCM = 1024 samples @16bit = 64ms @16kHz — 写入 I2S DMA 很快 */
-    audio_play(buf, br);
+    if (audio_write_pcm(buf, br / sizeof(int16_t),
+                        16000, 1) != ESP_OK)
+        return PLAYER_ERROR;
 
     g_ap.pos += br;
     g_ap.chunks_done++;
@@ -239,7 +248,12 @@ static player_ret_t audio_player_tick_locked(void)
 
 static void audio_player_stop_locked(void)
 {
-    if (!g_ap.initialized) return;
+    esp_err_t amp_ret = audio_amp_set_enabled(false);
+    if (amp_ret != ESP_OK && amp_ret != ESP_ERR_INVALID_STATE)
+        ESP_LOGE(TAG, "Cannot mute amplifier: %s",
+                 esp_err_to_name(amp_ret));
+    if (!g_ap.initialized)
+        return;
 
     int64_t elapsed = esp_timer_get_time() - g_ap.start_time;
     ESP_LOGI(TAG, "Stopped: %lu chunks in %lld ms",
@@ -361,8 +375,11 @@ bool audio_player_toggle_mute(void)
     g_ap.muted = !g_ap.muted;
     if (g_ap.muted) {
         audio_set_volume(0);
+        audio_amp_set_enabled(false);
     } else {
         audio_set_volume(g_ap.volume);
+        if (g_ap.initialized)
+            audio_amp_set_enabled(true);
     }
     bool muted = g_ap.muted;
     audio_unlock();

@@ -38,6 +38,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | DAT3/BOOT | IO0 | SDMMC 1-bit 运行时不用；`DL` 复位时拉低 |
 | **ES8311 I2C** | SDA=IO4, SCL=IO5 | |
 | **ES8311 I2S** | MCLK=IO45, BCLK=IO39, WS=IO41, DOUT=IO42, DIN=IO40 |
+| **功放 MUTE/使能** | IO2 | 高电平开启喇叭；停止/静音时拉低 |
 | **USB OTG** | D_N=IO19, D_P=IO20 | |
 | **UART 共享总线** | | 三设备共享一条 UART 线路 |
 | CA51F352P4 TX → ESP32 RX | IO44 | CA51F352P4 发送指令给 ESP32 |
@@ -68,7 +69,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 **控制方式**: CA51F352P4 (主芯片) 通过共享 UART 总线发指令 → ESP32 (从机) 接收并执行。  
 背光由 CA51F352P4 自己控制, ESP32 不管。  
 **显示主循环**: CPU0 上 `switch(workspace)` 协作多任务, 1ms tick 驱动, 5 槽位轮转。
-**音频任务**: CPU1 独立 FreeRTOS 任务, 5ms tick；I2S 阻塞写入不会卡住视频/LCD 调度。
+**并行分工**: Flash/TF JPEG 解码固定 CPU0；音频固定 CPU1 独立 FreeRTOS 任务, 5ms tick。
 **FreeRTOS**: `CONFIG_FREERTOS_HZ=1000` (1 tick = 1ms, 在 `sdkconfig.defaults` 中配置)。
 
 ```
@@ -97,7 +98,6 @@ components/BSP/
 ├── SD_CARD/            # TF 卡挂载与协议配置 (当前 SDMMC 1-bit 40MHz)
 ├── SPI_SD/spi_sd.h     # 旧 sd_spi_* API 的兼容头
 ├── MYIIC/              # I2C 总线封装 (myiic_init1 未调用, audio.c 自带 I2C 初始化)
-├── LED/                # GPIO LED (IO2, 心跳指示)
 ├── KEY/                # 空目录, 旧板遗留 (无源文件)
 ├── XL9555/             # 空目录, 旧板遗留 (无源文件)
 
@@ -113,7 +113,7 @@ components/esp_lcd_jd9855/
 | 0 | UART 指令接收 + 解析 | 5ms |
 | 1 | 应用状态机 | 5ms |
 | 2 | 图片加载 tick；视频另走 1ms 快速服务 | 图片5ms / 视频1ms |
-| 3 | 系统监控 (LED心跳/堆日志) | 5ms |
+| 3 | 系统监控 (堆日志) | 5ms |
 | 4 | 保留空闲槽位 | 5ms |
 
 ### 应用状态机
@@ -239,7 +239,8 @@ GPIO0 在当前 SDMMC 1-bit 模式下不传输 TF 数据，仅在 `DL` 复位时
 
 ## 注意事项
 
-- ES8311 输出为 16-bit 单声道；PCM 固定 16kHz，MP3 按源文件在 8–48kHz 间动态切换。音频初始化时调用 `esp_codec_set_disable_when_closed(codec_dev, false)` 是关键：采样率切换走 `esp_codec_dev_close/open` 重配 I2S，此标志阻止 close 时 `es8311_suspend()` 停时钟，否则 open 阶段 `codec->set_fs()` 写寄存器会因芯片停摆而 I2C 超时
+- ES8311/I2S 固定为 44.1kHz、16-bit 单声道；16kHz PCM 和 8–48kHz MP3 在 CPU1 内线性转换到 44.1kHz，播放期间禁止 `esp_codec_dev_close/open`
+- GPIO2 为功放 MUTE/使能脚：播放且未静音时拉高，停止、错误或 `AMUTE` 时拉低；禁止恢复心跳 LED
 - Octal PSRAM 占 GPIO 26-37, 不可用作普通 GPIO
 - TF 卡使用 SDMMC 外设，LCD 使用 i80 外设，两者不争用同一外设总线
 - **LCD 驱动 IC 为 JD9855** (WA54TE057I-20Z, 320×320), 不是 NV3051G/ST7789

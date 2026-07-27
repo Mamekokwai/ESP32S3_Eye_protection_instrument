@@ -11,7 +11,6 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "driver/gpio.h"
 #include "audio.h"
 #include "spilcd.h"
 #include "sd_card.h"
@@ -107,13 +106,11 @@ static void display_tick(void)
     }
 }
 
-/* ---- 系统监控 (LED 心跳 / 堆日志) ---- */
+/* ---- 系统监控（堆日志；GPIO2 已专用于音频功放）---- */
 static uint16_t g_mon = 0;
 static void monitor_tick(void)
 {
     g_mon++;
-    if (g_mon % 50 == 0) /* 250ms */
-        gpio_set_level(GPIO_NUM_2, (g_mon / 50) % 2);
     if (g_mon % 400 == 0) /* 2s   */
         ESP_LOGI(TAG, "heap=%lu display=%d audio=%d",
                  esp_get_free_heap_size(), g_display_mode,
@@ -138,8 +135,6 @@ void app_main(void)
     esp_err_t sd_ret = sd_card_mount();
     if (sd_ret != ESP_OK)
         ESP_LOGW(TAG, "SD mount failed: %s", esp_err_to_name(sd_ret));
-
-    ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT));
 
     app_uart_init();
 

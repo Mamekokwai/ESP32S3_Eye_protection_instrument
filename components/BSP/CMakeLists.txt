@@ -1,11 +1,9 @@
 set(src_dirs
-    LED
     SD_CARD
     SPILCD
     MYIIC)
 
 set(include_dirs
-    LED
     SD_CARD
     SPI_SD
     SPILCD

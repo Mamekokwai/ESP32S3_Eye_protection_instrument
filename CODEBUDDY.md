@@ -44,9 +44,9 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 详细分析: `笔记/开发/嵌入式/项目/2026/0604眼保仪_ESP32S3_320x320/PSRAM DMA 数据损坏分析.md`
 
-### 2. GPIO1 LED/TE 冲突
+### 2. GPIO1 TE 冲突与 GPIO2 功放控制
 
-GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 LCD 状态机 → 黑屏。LED 已改 IO2。
+GPIO1 曾同时作为 LCD TE 输入和旧 LED 输出，输出模式破坏 LCD 状态机并导致黑屏。心跳 LED 已完全移除；GPIO2 现为功放 MUTE/使能脚，高电平开启喇叭。
 
 ### 3. 主循环 Tick 重构
 
@@ -56,7 +56,7 @@ GPIO1 同时是 LCD TE 输入和旧代码的 LED 输出, 输出模式破坏了 L
 
 `flash_player_tick()` 为非阻塞状态机。视频链路每 1ms 服务一次，其他 workspace 保持 5ms；Flash 视频使用双 40 行条带，TF 视频使用单 160 行条带。
 
-显示状态和音频状态相互独立：视频/图片共用 LCD，二者互斥；音频固定在 CPU1 的 FreeRTOS 任务中每 5ms 推进，可与 CPU0 上的视频播放或图片加载同时运行，不做音画同步。音频接口使用递归互斥锁保护，I2S 阻塞写入不会阻塞 LCD 主循环。
+显示状态和音频状态相互独立：视频/图片共用 LCD，二者互斥；Flash/TF JPEG 解码固定 CPU0，音频固定 CPU1，不做音画同步。ES8311/I2S 固定 44.1kHz，其他输入采样率由音频任务软件转换，避免播放期间 I2C 重配。
 
 ### 5. 传输与运行速度优化
 
@@ -92,7 +92,6 @@ components/BSP/
 ├── SPI_SD/spi_sd.h     # 旧 sd_spi_* API 兼容头
 ├── MYIIC/my_iic.c/h    # I2C (ES8311)
 ├── KEY/key.c/h         # 旧 BOOT 按键代码，已停止编译
-├── LED/led.c/h         # LED 心跳 (IO2)
 └── XL9555/             # 旧板遗留, 未使用
 
 components/esp_lcd_jd9855/
@@ -131,7 +130,7 @@ tools/                   # 视频转换 + 烧录脚本
 | ES8311 I2S | MCLK=IO45 BCLK=IO39 WS=IO41 DOUT=IO42 | |
 | UART1 RX | IO44 | CA51F352P4 → ESP32 |
 | UART0 TX | IO43 | ESP32 → 电脑调试 |
-| LED | IO2 | 心跳 |
+| 功放 MUTE/使能 | IO2 | HIGH=开启喇叭，停止/静音时 LOW |
 | PSRAM Octal | IO26-37 | 8MB, 80MHz |
 
 ## UART 指令协议

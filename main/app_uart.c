@@ -28,6 +28,7 @@
 #include "spilcd.h"
 #include "flash_player.h"
 #include "video_player.h"
+#include "audio.h"
 #include "audio_player.h"
 #include "sd_browser.h"
 #include "image_viewer.h"
@@ -331,7 +332,11 @@ static void cmd_handle(const char *cmd)
         while (*arg == ' ')
             arg++;
 
-        if (audio_player_start(arg) == ESP_OK)
+        if (!audio_is_ready())
+        {
+            uart_send_str("ERR audio codec not ready");
+        }
+        else if (audio_player_start(arg) == ESP_OK)
         {
             uart_send_str("OK APLAY");
         }
@@ -374,6 +379,78 @@ static void cmd_handle(const char *cmd)
         char r[32];
         snprintf(r, sizeof(r), "OK VOL %d", v);
         uart_send_str(r);
+        return;
+    }
+
+    /* === GPIO5 手动控制 === */
+    if (strcasecmp(cmd, "GPIO5") == 0 || strcasecmp(cmd, "G5") == 0)
+    {
+        gpio_config_t cfg = {
+            .pin_bit_mask = BIT64(5),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&cfg);
+        int lev = gpio_get_level(GPIO_NUM_5);
+        gpio_set_level(GPIO_NUM_5, !lev);
+        char r[32];
+        snprintf(r, sizeof(r), "GPIO5: %d -> %d", lev, !lev);
+        uart_send_str(r);
+        return;
+    }
+    if (strncasecmp(cmd, "GPIO5 ", 6) == 0)
+    {
+        int v = atoi(cmd + 6);
+        v = (v != 0);
+        gpio_config_t cfg = {
+            .pin_bit_mask = BIT64(5),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&cfg);
+        gpio_set_level(GPIO_NUM_5, v);
+        char r[32];
+        snprintf(r, sizeof(r), "GPIO5 set %d, readback=%d",
+                 v, gpio_get_level(GPIO_NUM_5));
+        uart_send_str(r);
+        return;
+    }
+    if (strncasecmp(cmd, "GPIO4 ", 6) == 0)
+    {
+        int v = atoi(cmd + 6);
+        v = (v != 0);
+        gpio_config_t cfg = {
+            .pin_bit_mask = BIT64(4),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&cfg);
+        gpio_set_level(GPIO_NUM_4, v);
+        char r[32];
+        snprintf(r, sizeof(r), "GPIO4 set %d, readback=%d",
+                 v, gpio_get_level(GPIO_NUM_4));
+        uart_send_str(r);
+        return;
+    }
+
+    /* === I2C 总线测试/恢复 (示波器诊断) === */
+    if (strcasecmp(cmd, "I2CTEST") == 0)
+    {
+        if (audio_i2c_test_is_running())
+            audio_i2c_test_stop();
+        else
+            audio_i2c_test_start();
+        return;
+    }
+    if (strcasecmp(cmd, "I2CFIX") == 0)
+    {
+        audio_i2c_bus_recover();
         return;
     }
 

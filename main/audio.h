@@ -1,24 +1,36 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 /**
- * @brief 初始化音频系统（I2C, I2S, ES8311, XL9555 MUTE）
+ * @brief 初始化音频系统（I2C、I2S、ES8311 和 GPIO2 功放控制）
  * @return ESP_OK 成功
  */
 esp_err_t audio_init(void);
 
 /**
+ * @brief 查询 ES8311 是否已完成初始化并可输出音频
+ */
+bool audio_is_ready(void);
+
+/**
+ * @brief 控制功放 MUTE 脚
+ * @param enabled true=GPIO2 拉高并开启喇叭，false=拉低并静音
+ */
+esp_err_t audio_amp_set_enabled(bool enabled);
+
+/**
  * @brief 播放 PCM 数据
- * @param data  PCM 音频数据缓冲区 (16bit, 单声道, 16kHz)
+ * @param data  PCM 音频数据缓冲区 (16bit, 单声道, 44.1kHz)
  * @param len   数据长度（字节）
  * @return ESP_OK 成功
  */
 esp_err_t audio_play(const uint8_t *data, size_t len);
 
 /**
- * @brief 将 ES8311/I2S 输出切换到指定采样率（输出固定为单声道）
+ * @brief 校验输入采样率（兼容旧 API；硬件输出固定 44.1kHz）
  */
 esp_err_t audio_set_sample_rate(int sample_rate);
 
@@ -38,3 +50,9 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
  * @return ESP_OK 成功
  */
 esp_err_t audio_set_volume(int vol);
+
+/* ---- I2C 总线测试/恢复 (示波器诊断用) ---- */
+void audio_i2c_test_start(void);
+void audio_i2c_test_stop(void);
+bool audio_i2c_test_is_running(void);
+void audio_i2c_bus_recover(void);
