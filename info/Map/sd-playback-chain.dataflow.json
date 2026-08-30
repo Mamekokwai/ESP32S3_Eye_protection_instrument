@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "SD 卡 → 屏幕 / 喇叭 播放链路",
+    "output": "info/Map/sd-playback-chain.html",
+    "viewBox": [1180, 640],
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    { "label": "数据源" },
+    { "label": "读取与解析" },
+    { "label": "解码" },
+    { "label": "缓冲与转换" },
+    { "label": "输出" }
+  ],
+  "nodes": [
+    { "id": "sd", "type": "database", "label": "TF 卡 (SD)", "sublabel": "SDMMC 1-bit 40MHz", "tag": "0:/", "stage": 0, "row": 0 },
+    { "id": "vp", "type": "backend", "label": "video_player", "sublabel": "AVI 解析 + 流式读取", "tag": "video_player.c", "stage": 1, "row": 0 },
+    { "id": "ap", "type": "backend", "label": "audio_player", "sublabel": "PCM 分块 / MP3 输入", "tag": "audio_player.c", "stage": 1, "row": 2 },
+    { "id": "jpeg", "type": "backend", "label": "JPEG 解码任务", "sublabel": "CPU0 · esp_new_jpeg", "tag": "mjpeg.c", "stage": 2, "row": 0 },
+    { "id": "mp3", "type": "backend", "label": "MP3 软解", "sublabel": "helix decoder", "tag": "mp3_decoder_wrapper.h", "stage": 2, "row": 1 },
+    { "id": "frame", "type": "database", "label": "帧缓冲 + 条带", "sublabel": "PSRAM 双缓冲 + SRAM 条带", "tag": "esp_cache_msync", "stage": 3, "row": 0 },
+    { "id": "resample", "type": "backend", "label": "重采样 + 音量", "sublabel": "线性重采样 → 44.1kHz", "tag": "audio.c", "stage": 3, "row": 2 },
+    { "id": "lcd", "type": "frontend", "label": "JD9855 双圆屏", "sublabel": "320×320 · i80 并口 DMA", "tag": "esp_lcd_jd9855", "stage": 4, "row": 0 },
+    { "id": "es8311", "type": "frontend", "label": "ES8311 + 功放", "sublabel": "I2S0 · DAC · GPIO2 使能", "tag": "audio.c", "stage": 4, "row": 2 }
+  ],
+  "flows": [
+    { "id": "sd-video", "from": "sd", "to": "vp", "label": "MJPEG AVI", "classification": "f_read 流式读取", "route": "straight", "labelAt": [200, 124] },
+    { "id": "sd-audio", "from": "sd", "to": "ap", "label": "PCM / MP3", "classification": "f_read 分块读取" },
+    { "id": "avi-chunk", "from": "vp", "to": "jpeg", "label": "movi 图像块", "classification": "音频块跳过" },
+    { "id": "mp3-frame", "from": "ap", "to": "mp3", "label": "MP3 帧", "classification": "4KB 输入缓冲" },
+    { "id": "pcm-chunk", "from": "ap", "to": "resample", "label": "PCM 块", "classification": "16kHz · 16bit 单声道" },
+    { "id": "decoded-pcm", "from": "mp3", "to": "resample", "label": "解码 PCM", "classification": "8–48kHz 可变" },
+    { "id": "rgb565", "from": "jpeg", "to": "frame", "label": "RGB565 帧", "classification": "PSRAM 双缓冲" },
+    { "id": "strip-dma", "from": "frame", "to": "lcd", "label": "160 行条带", "classification": "分窗 DMA 提交", "variant": "emphasis" },
+    { "id": "i2s-pcm", "from": "resample", "to": "es8311", "label": "44.1kHz PCM", "classification": "I2S0 TX" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "视频链路 (TF → 双屏)",
+      "items": [
+        "read_one_chunk 跳过 AVI 内音频块, 仅提取 MJPEG 图像块",
+        "JPEG 解码固定 CPU0 任务 (esp_new_jpeg SIMD), 输出到 PSRAM 双帧缓冲",
+        "解码帧显式 esp_cache_msync 同步后复制到内部 SRAM 160 行条带",
+        "按独立窗口 esp_lcd_panel_draw_bitmap DMA 提交, 禁止 PSRAM 直接 DMA"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "音频链路 (TF → 喇叭)",
+      "items": [
+        "CPU1 独立音频服务任务, 5ms tick, 递归互斥锁保护",
+        "PCM 直接分块 (2KB); MP3 经 helix 软解为 PCM",
+        "audio_write_pcm 线性重采样到 44.1kHz 单声道后写 I2S0",
+        "GPIO2 高电平使能功放, AMUTE / 停止时拉低"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "并行与调度",
+      "items": [
+        "视频解码 CPU0 与音频任务 CPU1 并行, APLAY 可与 VID / IMG 同时运行",
+        "显示状态与音频状态相互独立, 互不阻塞",
+        "TF 视频 tick 流水线: 解码检查 → 提交下一帧 → 预读 → 帧率控制 → TE 同步 → 条带 DMA"
+      ]
+    }
+  ]
+}

@@ -4,12 +4,12 @@
 #  将任意视频转为 MJPEG AVI (兼容本项目的 video_player)
 #
 #  依赖: ffmpeg
-#  配置: 同目录下 convert.conf
+#  配置: 同目录下 convert_mp4_to_avi.conf
 #
 #  用法:
-#    ./convert.sh video.mp4     → 输出 video_320x320_30fps_JQ5.avi
-#    ./convert.sh               → 批量转换 convert.conf 中的文件列表
-#    ./convert.sh -c            → 仅检查 ffmpeg 是否可用
+#    ./convert_mp4_to_avi.sh video.mp4     → 输出 video_320x320_30fps_JQ5.avi
+#    ./convert_mp4_to_avi.sh               → 批量转换 convert_mp4_to_avi.conf 中的文件列表
+#    ./convert_mp4_to_avi.sh -c            → 仅检查 ffmpeg 是否可用
 #
 #  命名规则: <原始名>_<宽>x<高>_<帧率>fps_JQ<质量>
 #  示例: 散光1.mp4 → 散光1_320x240_30fps_JQ5.avi
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG="$SCRIPT_DIR/convert.conf"
+CONFIG="$SCRIPT_DIR/convert_mp4_to_avi.conf"
 
 # ---- 加载配置 ----
 if [[ -f "$CONFIG" ]]; then

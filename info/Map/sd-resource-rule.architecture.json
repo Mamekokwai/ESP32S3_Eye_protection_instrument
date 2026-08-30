@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SD 卡资源判断规则（制作参考）",
+    "output": "info/Map/sd-resource-rule.html",
+    "viewBox": [1260, 620],
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "sd", "type": "database", "label": "TF 卡根目录", "sublabel": "SDMMC 1-bit · FAT", "pos": [40, 270], "size": [120, 60] },
+
+    { "id": "sv", "type": "security", "label": "后缀 .avi", "sublabel": "video_player", "pos": [300, 90], "size": [120, 56] },
+    { "id": "fv", "type": "security", "label": "AVI 结构 + MJPG", "sublabel": "RIFF/hdrl/strl/strf", "pos": [490, 90], "size": [130, 60], "tag": "否则拒" },
+    { "id": "lv", "type": "backend", "label": "≤320×320", "sublabel": "单帧≤96KB · 帧率>0", "pos": [680, 90], "size": [130, 60], "tag": "超限拒" },
+    { "id": "pv", "type": "frontend", "label": "视频 → 双屏", "sublabel": "解码 + 条带 DMA", "pos": [870, 90], "size": [130, 60] },
+
+    { "id": "sa", "type": "security", "label": "后缀 .pcm/.mp3", "sublabel": "audio_player", "pos": [300, 250], "size": [120, 56] },
+    { "id": "fa", "type": "security", "label": "格式判定", "sublabel": "mp3→helix · 其他→PCM", "pos": [490, 250], "size": [130, 60], "tag": "解码失败拒" },
+    { "id": "pa", "type": "frontend", "label": "音频 → 喇叭", "sublabel": "I2S0 · ES8311", "pos": [870, 250], "size": [130, 60] },
+
+    { "id": "si", "type": "security", "label": "后缀 .jpg/.jpeg", "sublabel": "image_viewer", "pos": [300, 410], "size": [120, 56] },
+    { "id": "fi", "type": "security", "label": "仅 Baseline", "sublabel": "Progressive 拒", "pos": [490, 410], "size": [130, 60], "tag": "否则拒" },
+    { "id": "li", "type": "backend", "label": "≤1MiB", "sublabel": "尺寸≤320×320", "pos": [680, 410], "size": [130, 60], "tag": "超限拒" },
+    { "id": "pi", "type": "frontend", "label": "图片 → 屏幕", "sublabel": "分块 DMA", "pos": [870, 410], "size": [130, 60] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "视频校验", "wraps": ["sv", "fv", "lv"], "pad": 16 },
+    { "kind": "region", "label": "音频校验", "wraps": ["sa", "fa"], "pad": 16 },
+    { "kind": "security-group", "label": "图片校验", "wraps": ["si", "fi", "li"], "pad": 16 }
+  ],
+  "connections": [
+    { "id": "cv", "from": "sd", "to": "sv" },
+    { "id": "ca", "from": "sd", "to": "sa" },
+    { "id": "ci", "from": "sd", "to": "si" },
+    { "id": "vf", "from": "sv", "to": "fv", "label": "匹配", "variant": "emphasis" },
+    { "id": "af", "from": "sa", "to": "fa", "label": "匹配" },
+    { "id": "ifi", "from": "si", "to": "fi", "label": "匹配" },
+    { "id": "fl", "from": "fv", "to": "lv", "label": "结构通过", "variant": "emphasis" },
+    { "id": "il", "from": "fi", "to": "li" },
+    { "id": "ap", "from": "fa", "to": "pa", "label": "可播放", "variant": "emphasis" },
+    { "id": "lp", "from": "lv", "to": "pv", "label": "通过", "variant": "emphasis" },
+    { "id": "ip", "from": "li", "to": "pi", "label": "通过" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "视频资源规范（.avi）",
+      "items": [
+        "MJPEG 编码 · AVI 结构 RIFF/hdrl/strl/strf 完整",
+        "解码尺寸 ≤320×320 · 单帧 JPEG ≤96KB · SecPerFrame≠0",
+        "AVI 内音频块被跳过，无需音轨",
+        "tools/convert.sh → video.avi 放 TF 卡根目录"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "音频资源规范（.pcm / .mp3）",
+      "items": [
+        ".pcm = 16bit/单声道/16kHz，直接分块输出",
+        ".mp3 8–48kHz · helix 软解 · 线性重采样到 44.1kHz",
+        "ES8311 固定 44.1kHz 16-bit 单声道（I2S0）",
+        "建议优先 .pcm 降低 CPU1 解码开销"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "图片资源规范（.jpg / .jpeg）",
+      "items": [
+        "仅 Baseline JPEG，Progressive 需先转 Base",
+        "文件 ≤1MiB · 解码尺寸 ≤320×320",
+        "小图自动居中，全屏 320×320 最清晰",
+        "放 TF 卡根目录供 IMG <N/名> 选择"
+      ]
+    }
+  ]
+}

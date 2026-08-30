@@ -1,0 +1,22 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.flashType": "UART",
+  "idf.port": "/dev/ttyUSB0",
+  "idf.openOcdConfigs": [
+    "interface/ftdi/esp_ftdi.cfg",
+    "target/esp32s3.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "clangd.path": "/home/nywerya/.espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin/clangd",
+  "cmake.configureEnvironment": {
+    "IDF_PATH": "/home/nywerya/esp/v5.4.4/esp-idf",
+    "PATH": "/home/nywerya/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin:/home/nywerya/.espressif/python_env/idf5.4_py3.12_env/bin:${env:PATH}"
+  },
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=/home/nywerya/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+    "--compile-commands-dir=/home/nywerya/Documents/code/260630_ESP32/template-app/build"
+  ]
+}
