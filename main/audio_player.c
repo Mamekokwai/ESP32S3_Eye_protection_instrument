@@ -37,7 +37,7 @@ typedef struct {
     int  volume;       /* 0-100 */
 
     FIL  file;
-    char filename[272];
+    char filename[MEDIA_CATALOG_PATH_MAX + 4];
     FSIZE_t file_size;
     FSIZE_t pos;
 
@@ -89,7 +89,7 @@ static esp_err_t audio_player_init_locked(const char *filename)
     g_ap.loop    = true;
 
     /* 构建 FatFS 路径 */
-    char fatfs_path[272];
+    char fatfs_path[MEDIA_CATALOG_PATH_MAX + 4];
     if (strncmp(filename, "/0:/", 4) == 0) {
         snprintf(fatfs_path, sizeof(fatfs_path), "0:%s", filename + 4);
     } else if (filename[0] == '/') {
@@ -321,14 +321,14 @@ esp_err_t audio_player_init(const char *filename)
 
 esp_err_t audio_player_start(const char *selection)
 {
-    char name[256];
+    char name[MEDIA_CATALOG_PATH_MAX];
     esp_err_t ret = media_catalog_resolve(
         MEDIA_AUDIO, selection, name, sizeof(name));
     if (ret != ESP_OK)
         return ret;
 
-    char path[272];
-    int written = snprintf(path, sizeof(path), "0:%s", name);
+    char path[MEDIA_CATALOG_PATH_MAX + 4];
+    int written = snprintf(path, sizeof(path), "0:/%s", name);
     if (written <= 0 || written >= (int)sizeof(path))
         return ESP_ERR_INVALID_SIZE;
     return audio_player_init(path);

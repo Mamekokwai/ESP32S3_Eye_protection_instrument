@@ -19,11 +19,11 @@ Use the ESP-IDF environment from this machine before building:
 source /home/nywerya/esp/v5.4.4/esp-idf/export.fish
 idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
-./tools/convert.sh video.mp4
-./tools/flash_video.sh video.avi
+./tools/linux/convert_mp4_to_avi.sh video.mp4
+./tools/linux/flash_video.sh video.avi
 ```
 
-`idf.py build` compiles firmware and dependencies. `flash monitor` programs the board and opens serial logs. `convert.sh` creates MJPEG AVI files for SD playback; `flash_video.sh` writes AVI content to the `storage` flash partition after a successful build.
+`idf.py build` compiles firmware and dependencies. `flash monitor` programs the board and opens serial logs. `convert_mp4_to_avi.sh` creates MJPEG AVI files; `flash_video.sh` writes AVI content to the `storage` flash partition before a production device's first encrypted boot.
 
 ## Coding Style & Naming Conventions
 
@@ -40,3 +40,5 @@ Recent history uses concise imperative commits, often with prefixes such as `fea
 ## Security & Configuration Tips
 
 Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, audio, UART, boot, or TE-related code. GPIO2 is the active-high audio amplifier MUTE/enable pin and must not be used as a heartbeat LED. The current TF path is SDMMC 1-bit at 40 MHz; GPIO0 is not used for normal card transfer.
+
+`VIDLIST`, `IMGLIST`, and `ALIST` recursively scan TF subdirectories; `SDLIST` remains a root-directory LCD browser. Production builds additionally use `sdkconfig.production.defaults`, Secure Boot V2, Release-mode Flash Encryption, and the one-time SD authorization flow in `SECURITY_PROVISIONING.md`. Never flash a production build to a development board or burn eFuses without an explicit hardware provisioning step.

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "生产加密授权解锁流程",
+    "output": "info/Map/production-unlock.html",
+    "viewBox": [1200, 680],
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "首启授权主相位" },
+    { "id": "terminal", "label": "结局" }
+  ],
+  "states": [
+    { "id": "boot", "type": "start", "label": "上电启动", "sublabel": "Bootloader 运行", "lane": "main", "col": 0, "step": "01" },
+    { "id": "guard", "type": "decision", "label": "安全门开启?", "sublabel": "SecureBoot + FlashEnc Release", "lane": "main", "col": 1, "step": "02", "tag": "eFuse" },
+    { "id": "marker", "type": "decision", "label": "已永久解锁?", "sublabel": "EYECARE_UNLOCKED eFuse", "lane": "main", "col": 2, "step": "03", "tag": "读位" },
+    { "id": "locked", "type": "waiting", "label": "锁定: 等令牌", "sublabel": "读 /eyecare.unlock · 失败重试", "lane": "main", "col": 3, "step": "04", "tag": "主循环" },
+    { "id": "unlock", "type": "success", "label": "验签并解锁", "sublabel": "签名 → 烧 eFuse → 进主程序", "lane": "main", "col": 4, "step": "05", "tag": "P-256" },
+    { "id": "denied", "type": "failure", "label": "拒绝运行", "sublabel": "安全 eFuse 未启用", "lane": "terminal", "col": 0, "tag": "硬失败" },
+    { "id": "booted", "type": "success", "label": "进入主程序", "sublabel": "LCD/音频/UART/媒体", "lane": "terminal", "col": 1, "tag": "运行" }
+  ],
+  "transitions": [
+    { "from": "boot", "to": "guard", "variant": "emphasis" },
+    { "from": "guard", "to": "denied", "label": "未启用", "variant": "security", "fromSide": "bottom", "toSide": "top" },
+    { "from": "guard", "to": "marker", "variant": "emphasis" },
+    { "from": "marker", "to": "locked", "variant": "security" },
+    { "from": "marker", "to": "booted", "label": "已置位", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "locked", "to": "unlock", "variant": "emphasis" },
+    { "from": "unlock", "to": "booted", "label": "解锁完成", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "一次授权机制",
+      "items": [
+        "仅控制工厂首启；正确令牌只烧一次 EYECARE_UNLOCKED eFuse，随后免卡",
+        "令牌不绑定设备，同一张卡可解锁所有量产设备",
+        "防读明文靠 Secure Boot V2 + Flash Encryption Release"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "验证链路（production_unlock.c）",
+      "items": [
+        "读出 /eyecare.unlock，验 magic/version/key_id + nonce",
+        "P-256 ECDSA 验签，覆盖前 28 字节载荷（SHA-256）",
+        "失败按 CONFIG_EYECARE_UNLOCK_RETRY_MS 持续退避重试"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全前提与边界",
+      "items": [
+        "未启用 Secure Boot / Flash Encryption → 拒绝解锁退出",
+        "eFuse 与 Release 设置不可逆，需样机先验证",
+        "storage、nvs_keys 分区已标记加密；ROM 下载受限"
+      ]
+    }
+  ]
+}

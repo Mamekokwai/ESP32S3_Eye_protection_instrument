@@ -25,8 +25,8 @@ esp_err_t audio_player_start_service(void);
 esp_err_t audio_player_init(const char *filename);
 
 /**
- * @brief  按序号或根目录文件名启动音频
- * @param  selection "1"、"music.mp3" 或 "music.pcm"
+ * @brief  按递归目录序号或 SD 相对路径启动音频
+ * @param  selection "1"、"music.mp3" 或 "audio/music.pcm"
  */
 esp_err_t audio_player_start(const char *selection);
 
@@ -62,6 +62,6 @@ bool audio_player_toggle_mute(void);
 const char *audio_player_current_file(void);
 
 /**
- * @brief  列出 SD 卡根目录 PCM/MP3 文件, 返回文件数
+ * @brief  递归列出 SD 卡 PCM/MP3 文件, 返回文件数
  */
 int audio_player_list_files(char *out_buf, size_t out_len);

@@ -1,70 +1,62 @@
 # ESP32-S3 UART 指令手册
 
-本固件通过 UART1 接收 CA51F352P4 指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。响应从调试串口输出，每条响应以 `\r\n` 结束。
+固件通过 UART1 RX（GPIO44）接收 CA51F352P4 的 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）输出日志和文本响应。ESP32 没有业务 UART TX 回到 CA51；USB 口也不是本协议的业务输入。
 
-## 通信参数
+接收行缓冲为 544 字节（包含结尾 `\0`）；超长行会被丢弃。响应通常以 `\r\n` 结束。
 
-| 项目 | 配置 |
+## 指令表
+
+| 指令 | 作用 |
 |---|---|
-| 波特率 | 115200 |
-| 格式 | 8 数据位、无校验、1 停止位 |
-| ESP32 RX | GPIO44 |
-| 数据方向 | CA51 → ESP32；ESP32 返回调试/状态文本 |
-
-## 视频指令
-
-| 指令 | 说明 | 成功响应 |
-|---|---|---|
-| `VPLAY` | 播放 Flash 中的 AVI/MJPEG 视频 | `OK VPLAY` |
-| `VPAUSE` | 暂停当前视频 | `OK VPAUSE` |
-| `VRESUME` | 继续暂停的视频 | `OK VRESUME` |
-| `VSTOP` | 停止视频并回到空闲 | `OK VSTOP` |
-
-视频播放器只显示 MJPEG 图像，AVI 内的音频块会被跳过，不输出声音。
-
-## TF 卡与图片
-
-| 指令 | 说明 |
-|---|---|
-| `SDLIST [page]` | 在 LCD 上分页显示 TF 卡根目录 |
-| `IMGLIST` | 返回根目录中的 `.jpg/.jpeg` 文件及序号 |
-| `IMG <N>` | 显示第 N 个 JPEG 文件 |
-| `IMG <filename.jpg>` | 按文件名显示 JPEG |
-
-`IMG` 开始时先返回 `OK IMG loading`，完成后返回 `OK IMG name widthxheight`。支持 Baseline JPEG，文件大小不超过 1 MiB，解码尺寸不超过 320×320；小图自动居中，Progressive JPEG 不支持。图片序号按 FAT 目录原始遍历顺序生成。
-
-## 音频指令
-
-| 指令 | 说明 | 成功响应 |
-|---|---|---|
-| `ALIST` | 列出 `.pcm` 和 `.mp3` 文件 | `ALIST` 后跟列表 |
-| `APLAY <N/filename>` | 播放指定音频 | `OK APLAY` |
-| `ASTOP` | 停止音频 | `OK ASTOP` |
-| `AMUTE` | 切换静音 | `OK AMUTE on/off` |
-| `VOL <0-100>` | 设置音量 | `OK VOL <value>` |
-
-音频状态与显示状态独立：`APLAY` 不会停止视频或取消图片加载，`VPLAY`、`IMG`、`SDLIST` 也不会停止音频。视频和图片共用 LCD，因此二者仍互斥。音频运行于 CPU1 独立任务，显示调度运行于 CPU0；各媒体独立播放，不做音画时间轴同步。`SLEEP` 会停止显示和音频。
-
-## 系统指令
-
-| 指令 | 说明 |
-|---|---|
-| `STATUS` | 分别查询显示状态和当前音频文件 |
+| `VLIST` | 列出 Flash `storage` 索引中的 AVI |
+| `VPLAY [N/filename.avi]` | 播放 Flash AVI；无参数时选默认项 |
+| `VIDLIST` | 递归列出 TF 卡中的 `.avi` |
+| `VID <N/path.avi>` | 按序号或相对路径播放 TF MJPEG AVI |
+| `VPAUSE` / `VRESUME` | 暂停/继续当前 Flash 或 TF 视频 |
+| `VSTOP` | 停止当前视频 |
+| `FIMGLIST` | 列出 Flash 索引中的 JPEG |
+| `FIMG <N/filename.jpg>` | 显示 Flash JPEG |
+| `IMGLIST` | 递归列出 TF 卡中的 `.jpg/.jpeg` |
+| `IMG <N/path.jpg>` | 按序号或相对路径显示 TF JPEG |
+| `ALIST` | 递归列出 TF 卡中的 `.pcm/.mp3` |
+| `APLAY <N/path>` | 播放 TF 音频 |
+| `ASTOP` | 停止音频 |
+| `AMUTE` | 切换静音；功放 GPIO2 随状态切换 |
+| `VOL <0-100>` | 设置音量 |
+| `SDLIST [page]` | 在 LCD 分页浏览 TF 卡根目录，页码从 1 开始 |
+| `STATUS` | 查询显示状态和音频状态 |
 | `INFO` | 查询剩余堆内存 |
-| `SLEEP` / `WAKE` | 进入/退出休眠画面 |
+| `SLEEP` / `WAKE` | 进入/退出休眠画面；`SLEEP` 同时停止音频 |
 | `RST` | 重启 ESP32 |
 
-## 错误响应
+诊断指令 `GPIO4 <0/1>`、`GPIO5 [0/1]`（别名 `G5`）、`I2CTEST`、`I2CFIX` 只用于产线/示波器排障，不属于正常产品协议。固件没有 `BL` 指令，背光由 CA51F352P4 控制。
 
-格式通常为 `ERR <reason>`，例如 `ERR no sd`、`ERR no such file`、`ERR IMG ESP_ERR_INVALID_SIZE`。未知指令返回 `ERR unknown: <command>`。
+## 媒体选择规则
 
-## 使用示例
+- `VIDLIST`、`IMGLIST`、`ALIST` 从 TF 卡挂载点递归遍历子目录，忽略 `.` 和 `..`，保存相对路径。
+- 数字参数按当前 FAT 遍历顺序选择；增删文件后序号可能变化，产品协议应优先使用稳定的相对路径。
+- 路径可以包含 UTF-8 中文；配置启用了 FatFS UTF-8 和长文件名。路径不得逃出挂载点。
+- `SDLIST` 是单独的屏幕浏览器，目前只显示 TF 根目录，不等同于递归媒体目录。
+
+## 并发与限制
+
+视频和图片共用 LCD，因此互斥；音频状态独立，可与 `VID`、`VPLAY` 或 `IMG` 并行。系统不做音画时间轴同步。
+
+- TF/Flash 视频仅显示 MJPEG 图像，AVI 音频块被跳过；TF 视频最大 320×320。
+- 图片仅支持 Baseline JPEG，文件最大 1 MiB、解码尺寸最大 320×320；小图居中，Progressive JPEG 会失败。
+- `IMG`/`FIMG` 先返回 `OK ... loading`，异步完成后再报告文件名和尺寸。
+
+## 响应示例
 
 ```text
-IMGLIST\n
-IMG 1\n
-APLAY music.mp3\n
-STATUS\n
-VSTOP\n
-ASTOP\n
+VIDLIST
+VID 1
+APLAY 提示音/启动.mp3
+STATUS
+VPAUSE
+VRESUME
+VSTOP
+ASTOP
 ```
+
+成功响应以 `OK` 或列表标题开头；失败通常为 `ERR <reason>`，未知指令为 `ERR unknown: <command>`。具体错误字符串以 [main/app_uart.c](main/app_uart.c) 为准。

@@ -1,0 +1,19 @@
+menu "Eye-care production security"
+
+    config EYECARE_PRODUCTION_LOCK
+        bool "Require a signed SD-card token before first use"
+        default n
+        select EFUSE_CUSTOM_TABLE
+        help
+            On a device whose permanent unlock eFuse is not set, start only
+            the SD-card unlock loop. A device-bound ECDSA P-256 token must be
+            present at /eyecare.unlock. Successful verification burns the
+            one-way unlock eFuse and normal application startup continues.
+
+    config EYECARE_UNLOCK_RETRY_MS
+        int "Unlock token retry interval (ms)"
+        depends on EYECARE_PRODUCTION_LOCK
+        range 250 10000
+        default 1000
+
+endmenu

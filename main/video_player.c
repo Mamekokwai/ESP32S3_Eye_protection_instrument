@@ -350,7 +350,7 @@ typedef struct
     uint32_t lcd_done_base;
     int64_t last_write_ts;
     int64_t decode_wait_log_ts;
-    char name[256];
+    char name[MEDIA_CATALOG_PATH_MAX];
 } vp_ctx_t;
 
 static vp_ctx_t g_vp = {0};
@@ -364,7 +364,7 @@ int video_player_list_files(char *output, size_t output_size)
 
 esp_err_t video_player_start(const char *selection)
 {
-    char name[256];
+    char name[MEDIA_CATALOG_PATH_MAX];
     esp_err_t ret = media_catalog_resolve(
         MEDIA_VIDEO, selection, name, sizeof(name));
     if (ret != ESP_OK)
@@ -428,7 +428,7 @@ esp_err_t video_player_init(const char *filename)
     }
 
     /* 打开文件, 解析 AVI 头 */
-    char fp[272];
+    char fp[MEDIA_CATALOG_PATH_MAX + 4];
     if (strncmp(filename, "/0:/", 4) == 0)
         snprintf(fp, sizeof(fp), "0:/%s", filename + 4);
     else if (strncmp(filename, "0:/", 3) == 0)

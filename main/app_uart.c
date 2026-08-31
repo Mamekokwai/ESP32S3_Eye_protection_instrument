@@ -41,9 +41,10 @@
 #define UART_RX_PIN GPIO_NUM_44
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 512
+#define UART_LINE_SIZE 544
 
 /* ---- 指令缓冲 ---- */
-static char g_line[128];
+static char g_line[UART_LINE_SIZE];
 static int g_pos = 0;
 
 /* ====== 内部 ====== */
@@ -229,7 +230,7 @@ static void cmd_handle(const char *cmd)
         if (ret == ESP_OK)
         {
             g_display_mode = DISPLAY_SD_VIDEO_PLAYING;
-            char response[320];
+            char response[UART_LINE_SIZE];
             snprintf(response, sizeof(response), "OK VID %s",
                      video_player_name());
             uart_send_str(response);
@@ -574,7 +575,7 @@ static void cmd_handle(const char *cmd)
         else if (g_display_mode == DISPLAY_SLEEP)
             display = "sleep";
         const char *af = audio_player_current_file();
-        char r[384];
+        char r[UART_LINE_SIZE];
         if (af)
             snprintf(r, sizeof(r), "STATUS display=%s audio=%s",
                      display, af);

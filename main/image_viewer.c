@@ -53,7 +53,7 @@ typedef struct
     uint32_t row;
     uint16_t offset_x;
     uint16_t offset_y;
-    char name[256];
+    char name[MEDIA_CATALOG_PATH_MAX];
     esp_err_t error;
     int64_t started_at;
 } image_context_t;
@@ -165,7 +165,7 @@ esp_err_t image_viewer_start(const char *selection)
 {
     image_viewer_cancel();
 
-    char path[320];
+    char path[MEDIA_CATALOG_PATH_MAX + sizeof(SD_CARD_MOUNT_POINT) + 1];
     esp_err_t ret = media_catalog_resolve(
         MEDIA_IMAGE, selection, s_image.name, sizeof(s_image.name));
     if (ret != ESP_OK)

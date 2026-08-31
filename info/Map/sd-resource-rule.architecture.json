@@ -8,7 +8,7 @@
     "quality_profile": "showcase"
   },
   "components": [
-    { "id": "sd", "type": "database", "label": "TF 卡根目录", "sublabel": "SDMMC 1-bit · FAT", "pos": [40, 270], "size": [120, 60] },
+    { "id": "sd", "type": "database", "label": "TF 卡目录树", "sublabel": "SDMMC 1-bit · FAT · 递归", "pos": [40, 270], "size": [120, 60] },
 
     { "id": "sv", "type": "security", "label": "后缀 .avi", "sublabel": "video_player", "pos": [300, 90], "size": [120, 56] },
     { "id": "fv", "type": "security", "label": "AVI 结构 + MJPG", "sublabel": "RIFF/hdrl/strl/strf", "pos": [490, 90], "size": [130, 60], "tag": "否则拒" },
@@ -50,7 +50,7 @@
         "MJPEG 编码 · AVI 结构 RIFF/hdrl/strl/strf 完整",
         "解码尺寸 ≤320×320 · 单帧 JPEG ≤96KB · SecPerFrame≠0",
         "AVI 内音频块被跳过，无需音轨",
-        "tools/convert.sh → video.avi 放 TF 卡根目录"
+        "tools/linux/convert_mp4_to_avi.sh → video.avi 可放任意子目录"
       ]
     },
     {
@@ -70,7 +70,7 @@
         "仅 Baseline JPEG，Progressive 需先转 Base",
         "文件 ≤1MiB · 解码尺寸 ≤320×320",
         "小图自动居中，全屏 320×320 最清晰",
-        "放 TF 卡根目录供 IMG <N/名> 选择"
+        "可放任意子目录，供 IMG <N/相对路径> 选择"
       ]
     }
   ]

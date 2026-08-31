@@ -19,6 +19,7 @@
 #include "audio_player.h"
 #include "image_viewer.h"
 #include "app_uart.h"
+#include "production_unlock.h"
 
 #define TAG "app"
 
@@ -122,6 +123,13 @@ static void monitor_tick(void)
 /* ====== 主入口 ====== */
 void app_main(void)
 {
+    /* 量产锁定设备在此之前只运行 SD 卡签名令牌验证。 */
+    if (!production_unlock_ensure())
+    {
+        ESP_LOGE(TAG, "Production unlock failed");
+        return;
+    }
+
     /* 硬件初始化 */
     ESP_LOGI(TAG, "audio init");
     esp_err_t audio_ret = audio_init();

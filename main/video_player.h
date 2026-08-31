@@ -23,7 +23,7 @@ typedef enum {
 esp_err_t video_player_init(const char *filename);
 
 /**
- * @brief 列出 TF 卡根目录中的 AVI 文件
+ * @brief 递归列出 TF 卡目录树中的 AVI 文件
  *
  * 输出格式与 IMGLIST 一致：每行 "序号=文件名"。
  */
