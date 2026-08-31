@@ -1,5 +1,9 @@
 # ESP32-S3 UART 指令手册
 
+当前通信架构：CA51 使用 UART1（RX=GPIO44、TX=GPIO43）与 ESP32 双向通信；电脑使用原生 USB Serial-JTAG 双向调试。两路独立缓冲、共用命令解析器，响应返回各自来源通道；UART0 不参与业务通信。
+
+USB Serial-JTAG 返回的协议响应统一带有 `JTAG ` 前缀（例如 `JTAG OK VID 1.avi`）；UART1 返回给 CA51 的响应不带此前缀。系统日志仍保持原有 `I/W/E` 格式。
+
 本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。响应同时输出到 UART0 和 USB，每条响应以 `\r\n` 结束。
 
 ## 通信参数

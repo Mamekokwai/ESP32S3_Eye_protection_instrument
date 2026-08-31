@@ -582,6 +582,9 @@ void flash_player_stop(void)
             vTaskDelay(pdMS_TO_TICKS(1));
             wait++;
         }
+        /* 任务自删除后由 Idle 回收其栈，避免紧接着切换到 SD 视频时
+         * 内部 RAM 暂未归还。 */
+        vTaskDelay(pdMS_TO_TICKS(2));
         s_task = NULL;
     }
     if (s_q)

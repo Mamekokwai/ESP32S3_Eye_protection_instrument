@@ -43,6 +43,7 @@
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 512
 #define UART_LINE_SIZE 544
+#define UART_TX_PIN GPIO_NUM_43
 
 /* ---- 指令缓冲 ---- */
 static char g_line[UART_LINE_SIZE];
@@ -51,20 +52,41 @@ static char g_usb_line[UART_LINE_SIZE];
 static int g_usb_pos = 0;
 static bool s_usb_input_ready;
 static uint8_t s_sleep_backlight = 100;
+typedef enum { CMD_SOURCE_UART1, CMD_SOURCE_USB, CMD_SOURCE_BOTH } cmd_source_t;
+static cmd_source_t s_cmd_source = CMD_SOURCE_BOTH;
 
 /* ====== 内部 ====== */
 
 /* printf → UART0 TX=IO43 (CA51 和电脑都收得到) */
 static void uart_send_str(const char *msg)
 {
-    printf("%s\r\n", msg);
-    /* 移交协议要求 USB Serial-JTAG 与 UART0 同步收到响应。 */
-    if (s_usb_input_ready) {
-        char line[UART_LINE_SIZE];
-        int n = snprintf(line, sizeof(line), "%s\r\n", msg);
-        if (n > 0)
-            usb_serial_jtag_write_bytes((const uint8_t *)line,
-                                        (size_t)n, 0);
+    char line[UART_LINE_SIZE];
+    int n = snprintf(line, sizeof(line), "%s\r\n", msg);
+    if (n <= 0)
+        return;
+    if (s_cmd_source == CMD_SOURCE_UART1)
+        uart_write_bytes(UART_PORT, line, n); /* UART1 TX=GPIO43 -> CA51 RX */
+    else if (s_cmd_source == CMD_SOURCE_BOTH)
+        printf("%s", line);
+    if (s_cmd_source == CMD_SOURCE_USB && s_usb_input_ready) {
+        char usb_line[UART_LINE_SIZE + 6];
+        int usb_n = snprintf(usb_line, sizeof(usb_line), "JTAG %s", line);
+        if (usb_n > 0) {
+            size_t sent = 0;
+            while (sent < (size_t)usb_n) {
+                size_t remaining = (size_t)usb_n - sent;
+                size_t chunk = remaining > 64 ? 64 : remaining;
+                int written = usb_serial_jtag_write_bytes(
+                    (const uint8_t *)usb_line + sent,
+                    chunk, pdMS_TO_TICKS(100));
+                if (written <= 0) {
+                    ESP_LOGW(TAG, "USB response truncated (%u/%u bytes)",
+                             (unsigned)sent, (unsigned)usb_n);
+                    break;
+                }
+                sent += (size_t)written;
+            }
+        }
     }
 }
 
@@ -209,8 +231,9 @@ static void cmd_handle(const char *cmd)
         int count = video_player_list_files(list, sizeof(list));
         if (count > 0)
         {
-            uart_send_str("VIDLIST");
-            uart_send_str(list);
+            char response[UART_LINE_SIZE + 16];
+            snprintf(response, sizeof(response), "VIDLIST\r\n%s", list);
+            uart_send_str(response);
         }
         else if (count == 0)
             uart_send_str("VIDLIST NONE");
@@ -683,8 +706,12 @@ static void feed_char(char ch, char *line, int *pos)
             line[*pos] = 0;
             while (*pos > 0 && line[*pos - 1] == ' ')
                 line[--(*pos)] = 0;
-            if (*pos > 0)
+            if (*pos > 0) {
+                cmd_source_t previous = s_cmd_source;
+                s_cmd_source = (line == g_usb_line) ? CMD_SOURCE_USB : CMD_SOURCE_UART1;
                 cmd_handle(line);
+                s_cmd_source = previous;
+            }
             *pos = 0;
         }
     }
@@ -706,7 +733,8 @@ void app_uart_init(void)
     };
     uart_driver_install(UART_PORT, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 0, NULL, 0);
     uart_param_config(UART_PORT, &cfg);
-    uart_set_pin(UART_PORT, UART_PIN_NO_CHANGE, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
     /* UART0 控制台在部分 ESP-IDF 配置中只使用 ROM/低层输出，并未安装
      * UART 驱动。安装后才能安全调用 uart_read_bytes() 接收 monitor 输入。 */

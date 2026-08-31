@@ -18,6 +18,12 @@ GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用
 
 ## 软件与媒体
 
+UART 业务链路已调整为 UART1（CA51，RX GPIO44/TX GPIO43）和 USB Serial-JTAG（电脑）双通道独立收发；UART0 不参与业务通信。
+
+SD 视频播放器的 LCD DMA 条带缓冲在播放器生命周期内持久复用，连续执行 `VID 1`、`VID 2` 等切换不会重复申请内部 DMA 内存。
+
+SD 视频流水线由 CPU0 执行主循环和 TF 读取，CPU1 执行 JPEG 解码；JPEG 解码任务优先级 4，低于 CPU1 音频任务优先级 5，使读取与解码并行且音频优先。
+
 | 项目 | 当前实现 |
 |---|---|
 | 启动门 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：无 SD 卡显示白底黑字`请插入SD卡`重试；加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。TF 卡只挂载一次，避免使已打开的字库句柄失效；Flash 自动视频不可用时显示 `READY / NO FLASH VIDEO`，不再保持黑屏。提示用内嵌 GBK16 点阵字库（无卡也显示） |

@@ -1,4 +1,4 @@
-﻿<#
+<#
   Windows Flash 媒体烧录工具 (Flash storage 分区)
   等价于 tools/linux/flash_video.sh
   步骤: 收集媒体文件 -> 解析 storage 偏移 -> 打包 -> esptool 烧录
@@ -107,7 +107,9 @@ if ((Test-Path $partBin) -and (Test-Path $partTool)) {
     $savedErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $tbl = & $python $partTool $partBin 2>$null
+        # 合并 stderr 并滤掉 gen_esp32part.py 的诊断提示 ("Parsing binary partition input...")
+        $full = & $python $partTool $partBin 2>&1
+        $tbl = @($full | Where-Object { $_ -is [string] -and $_ -notmatch '^Parsing' })
     } finally {
         $ErrorActionPreference = $savedErrorAction
     }

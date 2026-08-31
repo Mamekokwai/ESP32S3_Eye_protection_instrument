@@ -43,6 +43,8 @@
 #define VP_STRIP_H 160 // 写入条带高度
 #define VP_STRIP_BYTES (VP_STRIP_H * 320 * sizeof(uint16_t))
 #define VP_STRIP_BUFS 1
+#define VP_DECODE_TASK_CORE 1
+#define VP_DECODE_TASK_PRIORITY 4 /* audio service priority is 5 */
 
 extern esp_lcd_panel_handle_t panel_handle;
 extern volatile uint8_t refresh_done_flag;
@@ -119,6 +121,9 @@ typedef struct
 } sr_t;
 
 static uint8_t *s_refill_buf = NULL; /* DMA 对齐读取缓冲 */
+/* LCD DMA 条带缓冲在视频切换时持久复用。停止瞬间 DMA 可能尚未回调，
+ * 因此不能释放后立即重建，也不能丢失其指针。 */
+static uint16_t *s_strip_buf[VP_STRIP_BUFS];
 
 static esp_err_t sr_open(sr_t *sr, FIL *f, size_t sz)
 {
@@ -415,10 +420,15 @@ esp_err_t video_player_init(const char *filename)
     }
     for (int i = 0; i < VP_STRIP_BUFS; i++)
     {
-        g_vp.strip_buf[i] = heap_caps_aligned_alloc(
-            64, VP_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (!s_strip_buf[i])
+            s_strip_buf[i] = heap_caps_aligned_alloc(
+                64, VP_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        g_vp.strip_buf[i] = s_strip_buf[i];
         if (!g_vp.strip_buf[i])
+        {
+            ESP_LOGE(TAG, "OOM LCD strip buffer");
             break;
+        }
         g_vp.strip_buf_count++;
     }
     if (g_vp.strip_buf_count == 0)
@@ -464,12 +474,16 @@ esp_err_t video_player_init(const char *filename)
         goto fail;
 
     /* 视频解码留在 CPU0；CPU1 专用于独立音频服务。 */
+    /* CPU0 performs SD reads in app_main; CPU1 decodes concurrently.
+     * The decoder stays below the CPU1 audio task priority. */
     s_decode_q = xQueueCreate(1, sizeof(decode_job_t));
     s_decode_done = xSemaphoreCreateBinary();
     if (!s_decode_q || !s_decode_done ||
-        xTaskCreatePinnedToCore(decode_task, "jpeg_sd", 4096, NULL, 5,
-                                &s_decode_task, 0) != pdPASS)
+        xTaskCreatePinnedToCore(decode_task, "jpeg_sd", 4096, NULL,
+                                VP_DECODE_TASK_PRIORITY, &s_decode_task,
+                                VP_DECODE_TASK_CORE) != pdPASS)
     {
+        ESP_LOGE(TAG, "OOM JPEG decode task");
         ret = ESP_ERR_NO_MEM;
         goto fail;
     }
@@ -805,7 +819,7 @@ void video_player_stop(void)
         int wait = 0;
         while (refresh_done_count - g_vp.lcd_done_base <
                    g_vp.strip_submitted &&
-               wait++ < 100)
+               wait++ < 500)
             vTaskDelay(pdMS_TO_TICKS(1));
         lcd_idle = refresh_done_count - g_vp.lcd_done_base >=
                    g_vp.strip_submitted;
@@ -822,6 +836,9 @@ void video_player_stop(void)
             vTaskDelay(pdMS_TO_TICKS(1));
             wait++;
         }
+        /* 自删除任务的栈由 Idle 任务回收；让出一个 tick，避免下一次
+         * VID 立即创建 jpeg_sd 时误报 ESP_ERR_NO_MEM。 */
+        vTaskDelay(pdMS_TO_TICKS(2));
         s_decode_task = NULL;
     }
     if (s_decode_q)
@@ -854,14 +871,10 @@ void video_player_stop(void)
             g_vp.jpeg_buf[i] = NULL;
         }
     }
+    if (!lcd_idle)
+        ESP_LOGW(TAG, "LCD DMA stop timeout; retaining persistent strip buffer");
     for (int i = 0; i < VP_STRIP_BUFS; i++)
-    {
-        if (g_vp.strip_buf[i] && lcd_idle)
-        {
-            heap_caps_free(g_vp.strip_buf[i]);
-            g_vp.strip_buf[i] = NULL;
-        }
-    }
+        g_vp.strip_buf[i] = NULL;
 
     g_vp.initialized = false;
     ESP_LOGI(TAG, "Stopped");
