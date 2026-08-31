@@ -1,64 +1,195 @@
 # ESP32-S3 UART 指令手册
 
-固件通过 UART1 RX（GPIO44）和原生 USB Serial-JTAG 独立接收 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）和 USB Serial-JTAG 同时输出文本响应；两路输入使用独立缓冲，可同时接收。
+本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。响应同时输出到 UART0 和 USB，每条响应以 `\r\n` 结束。
 
-接收行缓冲为 544 字节（包含结尾 `\0`）；超长行会被丢弃。响应通常以 `\r\n` 结束。
+## 通信参数
 
-## 指令表
+| 项目 | 配置 |
+| --- | --- |
+| 电气电平 | 3.3 V TTL UART，空闲状态为高电平；不是 RS-232 电平 |
+| 串口格式 | 115200 bit/s、8 数据位、无校验、1 停止位、无流控 |
+| ESP32 指令输入 | GPIO44，UART1 RX |
+| ESP32 响应/日志输出 | GPIO43，UART0 TX |
+| 原生 USB | GPIO19 D-、GPIO20 D+，Linux `/dev/ttyACM*` |
+| 数据方向 | UART1/USB → ESP32；响应输出到 UART0/USB |
 
-| 指令 | 作用 |
-|---|---|
-| `VLIST` | 列出 Flash `storage` 索引中的 AVI |
-| `VPLAY [N/filename.avi]` | 播放 Flash AVI；无参数时选默认项 |
-| `VIDLIST` | 递归列出 TF 卡中的 `.avi` |
-| `VID <N/path.avi>` | 按序号或相对路径播放 TF MJPEG AVI |
-| `VPAUSE` / `VRESUME` | 暂停/继续当前 Flash 或 TF 视频 |
-| `VSTOP` | 停止当前视频 |
-| `FIMGLIST` | 列出 Flash 索引中的 JPEG |
-| `FIMG <N/filename.jpg>` | 显示 Flash JPEG |
-| `IMGLIST` | 递归列出 TF 卡中的 `.jpg/.jpeg` |
-| `IMG <N/path.jpg>` | 按序号或相对路径显示 TF JPEG |
-| `ALIST` | 递归列出 TF 卡中的 `.pcm/.mp3` |
-| `APLAY <N/path>` | 播放 TF 音频 |
-| `ASTOP` | 停止音频 |
-| `AMUTE` | 切换静音；功放 GPIO2 随状态切换 |
-| `VOL <0-100>` | 设置音量 |
-| `BL <0-100>` | 设置 LCD 背光亮度；0 为关闭，100 为全亮 |
-| `BL` / `BL?` | 查询当前 LCD 背光亮度，返回 `OK BL <value>` |
-| `SDLIST [page]` | 在 LCD 分页浏览 TF 卡根目录，页码从 1 开始 |
-| `STATUS` | 查询显示、音频和背光状态 |
-| `INFO` | 查询剩余堆内存 |
-| `SLEEP` / `WAKE` | 进入/退出休眠画面；`SLEEP` 同时停止音频并关闭背光，`WAKE` 恢复休眠前亮度 |
-| `RST` | 重启 ESP32 |
+GPIO19/20 原生 USB Serial/JTAG 在 Linux 上通常为 `/dev/ttyACM0`，可用于烧录、日志监控和输入 `VPLAY`、`BL` 等业务指令。UART1 与 USB 使用独立命令缓冲，可同时接收。
 
-诊断指令 `GPIO4 <0/1>`、`GPIO5 [0/1]`（别名 `G5`）、`I2CTEST`、`I2CFIX` 只用于产线/示波器排障，不属于正常产品协议。V1.4 背光由 ESP32 GPIO1（PWM_LED → Q3 → LEDK）控制，默认 100% 亮度；可通过 `BL <0-100>` 调节。
+## 主控芯片接入说明
 
-## 媒体选择规则
+### 硬件连接
 
-- `VIDLIST`、`IMGLIST`、`ALIST` 从 TF 卡挂载点递归遍历子目录，忽略 `.` 和 `..`，保存相对路径。
-- 数字参数按当前 FAT 遍历顺序选择；增删文件后序号可能变化，产品协议应优先使用稳定的相对路径。
-- 路径可以包含中文（GBK；FATFS 用 CODEPAGE_936 + 长文件名）。路径不得逃出挂载点。
-- `SDLIST` 是单独的屏幕浏览器，目前只显示 TF 根目录（可用 GBK16 字库显示中文文件名），不等同于递归媒体目录。
-
-## 并发与限制
-
-视频和图片共用 LCD，因此互斥；音频状态独立，可与 `VID`、`VPLAY` 或 `IMG` 并行。系统不做音画时间轴同步。
-
-- TF/Flash 视频仅显示 MJPEG 图像，AVI 音频块被跳过；TF 视频最大 320×320。
-- 图片仅支持 Baseline JPEG，文件最大 1 MiB、解码尺寸最大 320×320；小图居中，Progressive JPEG 会失败。
-- `IMG`/`FIMG` 先返回 `OK ... loading`，异步完成后再报告文件名和尺寸。
-
-## 响应示例
+外部主控只负责发送指令时，至少连接主控 TX 和公共 GND；需要读取执行结果时再连接主控 RX：
 
 ```text
-VIDLIST
-VID 1
-APLAY 提示音/启动.mp3
-STATUS
-VPAUSE
-VRESUME
-VSTOP
-ASTOP
+主控 TX  ──────────────> ESP32 GPIO44（指令 RX）
+主控 RX  <────────────── ESP32 GPIO43（响应及日志 TX，可选）
+主控 GND ─────────────── ESP32 GND
 ```
 
-成功响应以 `OK` 或列表标题开头；失败通常为 `ERR <reason>`，未知指令为 `ERR unknown: <command>`。具体错误字符串以 [main/app_uart.c](main/app_uart.c) 为准。
+YT06 V1.1 板上已经完成以下连接，编写 CA51F352P4 程序时无需另外飞线：
+
+| CA51F352P4 | ESP32-S3 | 用途 |
+| --- | --- | --- |
+| U7-19，TX0 | GPIO44 | CA51 向 ESP32 发送指令 |
+| U7-18，RX0 | GPIO43 | CA51 接收 ESP32 响应和调试日志 |
+| U7-20，GND | GND | 两颗芯片共地 |
+
+两颗芯片均使用 3.3 V 逻辑。主控 TX 必须接 ESP32 RX，不能将两个输出脚直接相连；不要向 GPIO43 驱动信号。GPIO19/20 是原生 USB，不是主控 UART 引脚；GPIO0 是启动配置脚，也不要用于本协议。
+
+### 主控发送流程
+
+1. 将主控 UART 配置为 `115200-8N1`，关闭硬件流控。
+2. ESP32 的 UART 接收在外设初始化完成后才启用。两颗芯片同时上电时，建议主控等待约 3 秒再发送第一条指令。
+3. 发送一条 ASCII 指令，最后追加换行字节 `0x0A`。也支持以 `0x0D` 或 `0x0D 0x0A` 结束。
+4. 不需要发送 C 字符串结尾的 `0x00`。单条指令不要超过 127 个字符。
+5. 如需确认执行结果，等待一行 `OK ...` 或 `ERR ...` 后再发送下一条指令。
+
+通用 C 伪代码示例（`uart_send_*` 请替换为主控 SDK 的发送接口）：
+
+```c
+static void esp32_send_command(const char *command)
+{
+    uart_send_bytes((const uint8_t *)command, strlen(command));
+    uart_send_byte('\n');
+}
+
+esp32_send_command("BL 50");
+esp32_send_command("VPLAY 1");
+esp32_send_command("APLAY 1");
+```
+
+例如 `BL 50\n` 实际发送的十六进制字节为：
+
+```text
+42 4C 20 35 30 0A
+```
+
+GPIO43 除协议响应外还会输出 ESP-IDF 启动和运行日志。主控接收程序应按换行分帧，并只处理下列前缀；其他行可以忽略：
+
+```text
+OK ...
+ERR ...
+STATUS ...
+INFO ...
+VLIST / VIDLIST / ALIST / FIMGLIST / IMGLIST
+```
+
+若主控不需要反馈，可以不连接 RX，仅发送带换行的指令。
+
+## 视频指令
+
+### Flash 视频
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `VLIST` | 列出 Flash 中的 AVI 视频及序号 | `VLIST` 后跟列表 |
+| `VPLAY` | 播放 Flash 中第 1 个 AVI | `OK VPLAY <filename>` |
+| `VPLAY <N>` | 播放 Flash 中第 N 个 AVI | `OK VPLAY <filename>` |
+| `VPLAY <filename.avi>` | 按文件名播放 Flash AVI | `OK VPLAY <filename>` |
+
+### TF 卡视频
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `VIDLIST` | 列出 TF 卡根目录中的 AVI 视频及序号 | `VIDLIST` 后跟列表 |
+| `VID <N>` | 播放 TF 卡中第 N 个 AVI | `OK VID <filename>` |
+| `VID <filename.avi>` | 按文件名播放 TF 卡 AVI | `OK VID <filename>` |
+
+### 通用视频控制
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `VPAUSE` | 暂停当前 Flash 或 TF 视频 | `OK VPAUSE` |
+| `VRESUME` | 继续当前暂停的视频 | `OK VRESUME` |
+| `VSTOP` | 停止当前 Flash 或 TF 视频并回到空闲 | `OK VSTOP` |
+
+Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器只显示 MJPEG 图像；AVI 内的音频块会被跳过，不输出声音。
+
+## 图片与 TF 卡目录
+
+### Flash 图片
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `FIMGLIST` | 列出 Flash 中的 JPEG 图片及序号 | `FIMGLIST` 后跟列表 |
+| `FIMG <N>` | 显示 Flash 中第 N 个 JPEG | `OK FIMG loading` |
+| `FIMG <filename.jpg>` | 按文件名显示 Flash JPEG | `OK FIMG loading` |
+
+`FIMG` 加载完成后会再次返回 `OK FIMG name widthxheight`。
+
+### TF 卡目录与图片
+
+| 指令 | 说明 |
+| --- | --- |
+| `SDLIST [page]` | 在 LCD 上分页显示 TF 卡根目录 |
+| `IMGLIST` | 返回根目录中的 `.jpg/.jpeg` 文件及序号 |
+| `IMG <N>` | 显示第 N 个 JPEG 文件 |
+| `IMG <filename.jpg>` | 按文件名显示 JPEG |
+
+`IMG` 开始时先返回 `OK IMG loading`，完成后返回 `OK IMG name widthxheight`。支持 Baseline JPEG，文件大小不超过 1 MiB，解码尺寸不超过 320×320；小图自动居中，Progressive JPEG 不支持。图片序号按 FAT 目录原始遍历顺序生成。
+
+## 音频指令
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `ALIST` | 列出 `.pcm` 和 `.mp3` 文件 | `ALIST` 后跟列表 |
+| `APLAY <N/filename>` | 播放指定音频 | `OK APLAY` |
+| `ASTOP` | 停止音频 | `OK ASTOP` |
+| `AMUTE` | 切换静音 | `OK AMUTE on/off` |
+| `VOL <0-100>` | 设置音量 | `OK VOL <value>` |
+
+音频状态与显示状态独立：`APLAY` 不会停止视频或取消图片加载，`VPLAY`、`IMG`、`SDLIST` 也不会停止音频。视频和图片共用 LCD，因此二者仍互斥。音频运行于 CPU1 独立任务，显示调度运行于 CPU0；各媒体独立播放，不做音画时间轴同步。`SLEEP` 会停止显示和音频。
+
+## 背光指令
+
+| 指令 | 说明 | 成功响应 |
+| --- | --- | --- |
+| `BL <0-100>` | 设置 LCD 背光亮度百分比；`0` 为关闭 | `OK BL <value>` |
+| `BL` / `BL?` | 查询当前设定亮度 | `OK BL <value>` |
+
+背光由 GPIO1 的 20 kHz LEDC 硬件 PWM 驱动。`SLEEP` 会关闭实际 PWM 输出但保留设定值；休眠期间仍可用 `BL` 修改待恢复亮度，`WAKE` 后按该亮度恢复。
+
+## 系统指令
+
+| 指令 | 说明 |
+| --- | --- |
+| `STATUS` | 查询显示、音频和背光亮度状态 |
+| `INFO` | 查询剩余堆内存 |
+| `SLEEP` / `WAKE` | 进入/退出休眠画面 |
+| `RST` | 重启 ESP32 |
+
+## 工程调试指令
+
+以下指令仅用于硬件诊断，不应写入 CA51F352P4 的量产控制流程：
+
+| 指令 | 作用 | 风险 |
+| --- | --- | --- |
+| `GPIO5` / `G5` | 翻转 GPIO5 电平 | GPIO5 是 ES8311 I2C SCL，会中断音频控制 |
+| `GPIO5 <0/1>` | 强制设置 GPIO5 | 会把 I2C SCL 改成普通输出 |
+| `GPIO4 <0/1>` | 强制设置 GPIO4 | GPIO4 是 ES8311 I2C SDA，会破坏 I2C 通信 |
+| `I2CTEST` | 启动或停止约 1 kHz 的 ES8311 I2C 读测试 | 仅供示波器观察，增加总线负载 |
+| `I2CFIX` | 对 I2C 总线执行 GPIO 恢复脉冲 | 会暂时接管 SDA/SCL 引脚 |
+
+误发 `GPIO4`、`GPIO5` 或 `I2CFIX` 后，音量控制和音频初始化可能失效；正常业务只使用前述视频、图片、音频、背光和系统指令。
+
+## 错误响应
+
+格式通常为 `ERR <reason>`，例如 `ERR no sd`、`ERR no such file`、`ERR IMG ESP_ERR_INVALID_SIZE`。未知指令返回 `ERR unknown: <command>`。
+
+## 使用示例
+
+```text
+VLIST\n
+VPLAY 1\n
+VIDLIST\n
+VID 1\n
+FIMGLIST\n
+FIMG 1\n
+IMGLIST\n
+IMG 1\n
+APLAY music.mp3\n
+STATUS\n
+VSTOP\n
+ASTOP\n
+```
