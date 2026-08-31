@@ -10,6 +10,7 @@
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
 - 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
+- UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
 - 启动显示：无 TF 卡时提示“请插入SD卡”；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
 - 生产安全：可选的一次性 **通用** SD 授权令牌（不绑定设备，一卡解锁所有设备；P-256 签名验证 + `EYECARE_UNLOCKED` eFuse），配合 Secure Boot V2 和 Release 模式 Flash Encryption；开发构建默认关闭。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 
@@ -83,7 +84,7 @@ idf.py -B build-production \
 | I2S MCLK / BCLK / WS / DOUT | 45 / 39 / 41 / 42 |
 | 功放使能 | 2，高电平开启 |
 | UART1 RX（业务输入） | 44 |
-| UART0 TX（日志/响应） | 43 |
+| UART1 TX（CA51 响应） | 43 |
 
 GPIO0 不参与当前 SDMMC 1-bit 数据传输。GPIO38 是 LCD D/C，不是 UART TX。V1.4 无 TE 引脚（GPIO1 为背光 PWM，非 TE 帧同步）。
 

@@ -11,7 +11,7 @@ typedef enum
     MEDIA_VIDEO,
 } media_kind_t;
 
-/** Maximum UTF-8 byte length of a catalog path, including the terminator. */
+/** Maximum FATFS API path byte length (CP936/GBK), including the terminator. */
 #define MEDIA_CATALOG_PATH_MAX 512
 
 /**

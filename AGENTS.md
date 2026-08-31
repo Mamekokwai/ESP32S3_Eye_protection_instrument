@@ -41,7 +41,7 @@ Recent history uses concise imperative commits, often with prefixes such as `fea
 
 Do not commit generated `build/` output, private media, or device-specific secrets. Recheck GPIO assignments before changing LCD, audio, UART, boot, or TE-related code. GPIO2 is the active-high audio amplifier MUTE/enable pin and must not be used as a heartbeat LED. The current TF path is SDMMC 1-bit at 40 MHz; GPIO0 is not used for normal card transfer. V1.4 硬件无 TE 引脚：GPIO1 是背光 PWM（PWM_LED→R17→Q3→LEDK），由 ESP32 LEDC 驱动。
 
-中文显示：FATFS 用 CODEPAGE_936（`d_name` 为 GBK 双字节），启动提示走内嵌点阵字库（`gbk_embedded_font.h`），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`（`gbk_font.c`）。媒体递归路径为 GBK；UART 输出的中文路径为 GBK 编码（终端需按 GBK 解读）。新增/删除字库或改编码前检查 `sdkconfig.defaults` 的 FATFS 配置。
+中文显示：FATFS 用 CODEPAGE_936（`d_name` 为 GBK 双字节），启动提示走内嵌点阵字库（`gbk_embedded_font.h`），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`（`gbk_font.c`）。媒体递归路径在固件内部为 GBK；UART1 响应默认 GBK，USB Serial-JTAG 响应默认 UTF-8，可通过 `ENC UTF8|GBK` 为当前链路独立切换。新增/删除字库或改编码前检查 `sdkconfig.defaults` 的 FATFS 配置。
 
 `VIDLIST`, `IMGLIST`, and `ALIST` recursively scan TF subdirectories; `SDLIST` remains a root-directory LCD browser. Production builds additionally use `sdkconfig.production.defaults`, Secure Boot V2, Release-mode Flash Encryption, and the one-time SD authorization flow in `SECURITY_PROVISIONING.md`. Never flash a production build to a development board or burn eFuses without an explicit hardware provisioning step.
 

@@ -1,15 +1,15 @@
 /**
  * @brief  UART 指令系统 — 接收 CA51F352P4 指令, 驱动屏幕
  *
- * CA51F352P4 TX → IO44 → UART1 RX
- * PC/调试输入也可走 UART0 RX；调试输出: printf → UART0 TX (IO43)
+ * CA51F352P4 TX → IO44 → UART1 RX；UART1 TX IO43 → CA51F352P4 RX
+ * PC/调试输入输出走原生 USB Serial-JTAG。
  *
- * UART0 与 UART1 共用同一命令行解析器，便于直接从 idf.py monitor 调试。
+ * UART1 与 USB 使用独立缓冲并共用同一命令解析器。
  *
  * 指令: VLIST / VPLAY / FIMGLIST / FIMG
  *       VIDLIST / VID / VPAUSE / VRESUME / VSTOP
  *       APLAY / ALIST / ASTOP / AMUTE / VOL / BL / SDLIST / IMGLIST / IMG
- *       RST / STATUS / INFO / SLEEP / WAKE
+ *       ENC / RST / STATUS / INFO / SLEEP / WAKE
  */
 
 #include "app_uart.h"
@@ -27,6 +27,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "ff.h"
 #include "spilcd.h"
 #include "flash_player.h"
 #include "video_player.h"
@@ -37,12 +38,13 @@
 
 #define TAG "uart"
 
-/* ---- UART1 仅 RX ---- */
+/* ---- UART1 与 CA51 双向通信 ---- */
 #define UART_PORT UART_NUM_1
 #define UART_RX_PIN GPIO_NUM_44
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 512
 #define UART_LINE_SIZE 544
+#define UART_ENCODED_LINE_SIZE (UART_LINE_SIZE * 2 + 32)
 #define UART_TX_PIN GPIO_NUM_43
 
 /* ---- 指令缓冲 ---- */
@@ -55,39 +57,237 @@ static uint8_t s_sleep_backlight = 100;
 typedef enum { CMD_SOURCE_UART1, CMD_SOURCE_USB, CMD_SOURCE_BOTH } cmd_source_t;
 static cmd_source_t s_cmd_source = CMD_SOURCE_BOTH;
 
+typedef enum
+{
+    UART_ENCODING_GBK,
+    UART_ENCODING_UTF8,
+} uart_encoding_t;
+
+/* CA51沿用移交协议的GBK；电脑终端默认使用UTF-8。 */
+static uart_encoding_t s_uart1_encoding = UART_ENCODING_GBK;
+static uart_encoding_t s_usb_encoding = UART_ENCODING_UTF8;
+
 /* ====== 内部 ====== */
 
-/* printf → UART0 TX=IO43 (CA51 和电脑都收得到) */
-static void uart_send_str(const char *msg)
+static const char *encoding_name(uart_encoding_t encoding)
 {
-    char line[UART_LINE_SIZE];
-    int n = snprintf(line, sizeof(line), "%s\r\n", msg);
-    if (n <= 0)
+    return encoding == UART_ENCODING_UTF8 ? "UTF8" : "GBK";
+}
+
+static uart_encoding_t *current_output_encoding(void)
+{
+    if (s_cmd_source == CMD_SOURCE_UART1)
+        return &s_uart1_encoding;
+    return &s_usb_encoding;
+}
+
+static size_t append_utf8(uint32_t codepoint, char *output,
+                          size_t used, size_t output_size)
+{
+    size_t needed = codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2 : 3;
+    if (used + needed >= output_size)
+        return used;
+
+    if (needed == 1)
+    {
+        output[used++] = (char)codepoint;
+    }
+    else if (needed == 2)
+    {
+        output[used++] = (char)(0xC0 | (codepoint >> 6));
+        output[used++] = (char)(0x80 | (codepoint & 0x3F));
+    }
+    else
+    {
+        output[used++] = (char)(0xE0 | (codepoint >> 12));
+        output[used++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        output[used++] = (char)(0x80 | (codepoint & 0x3F));
+    }
+    return used;
+}
+
+/* FATFS ANSI/OEM API返回CP936/GBK字节；转换为电脑终端使用的UTF-8。 */
+static size_t gbk_to_utf8(const char *input, char *output, size_t output_size)
+{
+    const uint8_t *source = (const uint8_t *)input;
+    size_t used = 0;
+
+    if (output_size == 0)
+        return 0;
+
+    while (*source)
+    {
+        uint32_t codepoint;
+        if (*source < 0x80)
+        {
+            codepoint = *source++;
+        }
+        else if (source[1] != 0)
+        {
+            WCHAR gbk = (WCHAR)(((WCHAR)source[0] << 8) | source[1]);
+            codepoint = ff_oem2uni(gbk, 936);
+            source += 2;
+            if (codepoint == 0)
+                codepoint = 0xFFFD;
+        }
+        else
+        {
+            source++;
+            codepoint = 0xFFFD;
+        }
+
+        size_t next = append_utf8(codepoint, output, used, output_size);
+        if (next == used && codepoint != 0)
+            break;
+        used = next;
+    }
+    output[used] = '\0';
+    return used;
+}
+
+static bool decode_utf8_char(const uint8_t **source, uint32_t *codepoint)
+{
+    const uint8_t *s = *source;
+    if (s[0] < 0x80)
+    {
+        *codepoint = s[0];
+        *source = s + 1;
+        return true;
+    }
+    if (s[0] >= 0xC2 && s[0] <= 0xDF &&
+        s[1] >= 0x80 && s[1] <= 0xBF)
+    {
+        *codepoint = ((uint32_t)(s[0] & 0x1F) << 6) |
+                     (uint32_t)(s[1] & 0x3F);
+        *source = s + 2;
+        return true;
+    }
+    if (s[0] >= 0xE0 && s[0] <= 0xEF && s[1] != 0 && s[2] != 0 &&
+        s[1] >= 0x80 && s[1] <= 0xBF &&
+        s[2] >= 0x80 && s[2] <= 0xBF &&
+        !(s[0] == 0xE0 && s[1] < 0xA0) &&
+        !(s[0] == 0xED && s[1] >= 0xA0))
+    {
+        *codepoint = ((uint32_t)(s[0] & 0x0F) << 12) |
+                     ((uint32_t)(s[1] & 0x3F) << 6) |
+                     (uint32_t)(s[2] & 0x3F);
+        *source = s + 3;
+        return true;
+    }
+
+    *codepoint = '?';
+    *source = s + 1;
+    return false;
+}
+
+static size_t utf8_to_gbk(const char *input, char *output, size_t output_size)
+{
+    const uint8_t *source = (const uint8_t *)input;
+    size_t used = 0;
+
+    if (output_size == 0)
+        return 0;
+
+    while (*source)
+    {
+        uint32_t codepoint;
+        decode_utf8_char(&source, &codepoint);
+        WCHAR gbk = codepoint < 0x80 ? (WCHAR)codepoint
+                                     : ff_uni2oem(codepoint, 936);
+        if (gbk == 0)
+            gbk = '?';
+
+        size_t needed = gbk > 0xFF ? 2 : 1;
+        if (used + needed >= output_size)
+            break;
+        if (needed == 2)
+            output[used++] = (char)(gbk >> 8);
+        output[used++] = (char)(gbk & 0xFF);
+    }
+    output[used] = '\0';
+    return used;
+}
+
+static size_t make_response_line(const char *message,
+                                 uart_encoding_t source_encoding,
+                                 uart_encoding_t output_encoding,
+                                 char *line, size_t line_size)
+{
+    if (line_size < 3)
+        return 0;
+
+    size_t used;
+    if (source_encoding == output_encoding)
+    {
+        used = strlen(message);
+        if (used > line_size - 3)
+            used = line_size - 3;
+        memcpy(line, message, used);
+        line[used] = '\0';
+    }
+    else if (output_encoding == UART_ENCODING_UTF8)
+    {
+        used = gbk_to_utf8(message, line, line_size - 2);
+    }
+    else
+    {
+        used = utf8_to_gbk(message, line, line_size - 2);
+    }
+
+    line[used++] = '\r';
+    line[used++] = '\n';
+    line[used] = '\0';
+    return used;
+}
+
+static void usb_write_all(const char *data, size_t length)
+{
+    size_t sent = 0;
+    while (sent < length)
+    {
+        size_t remaining = length - sent;
+        size_t chunk = remaining > 64 ? 64 : remaining;
+        int written = usb_serial_jtag_write_bytes(
+            (const uint8_t *)data + sent, chunk, pdMS_TO_TICKS(100));
+        if (written <= 0)
+        {
+            ESP_LOGW(TAG, "USB response truncated (%u/%u bytes)",
+                     (unsigned)sent, (unsigned)length);
+            break;
+        }
+        sent += (size_t)written;
+    }
+}
+
+static void uart_send_encoded(const char *msg, uart_encoding_t source_encoding)
+{
+    uart_encoding_t output_encoding = *current_output_encoding();
+    char line[UART_ENCODED_LINE_SIZE];
+    size_t length = make_response_line(msg, source_encoding, output_encoding,
+                                       line, sizeof(line));
+    if (length == 0)
         return;
     if (s_cmd_source == CMD_SOURCE_UART1)
-        uart_write_bytes(UART_PORT, line, n); /* UART1 TX=GPIO43 -> CA51 RX */
+        uart_write_bytes(UART_PORT, line, length); /* UART1 TX=GPIO43 -> CA51 RX */
     else if (s_cmd_source == CMD_SOURCE_BOTH)
         printf("%s", line);
-    if (s_cmd_source == CMD_SOURCE_USB && s_usb_input_ready) {
-        char usb_line[UART_LINE_SIZE + 6];
-        int usb_n = snprintf(usb_line, sizeof(usb_line), "JTAG %s", line);
-        if (usb_n > 0) {
-            size_t sent = 0;
-            while (sent < (size_t)usb_n) {
-                size_t remaining = (size_t)usb_n - sent;
-                size_t chunk = remaining > 64 ? 64 : remaining;
-                int written = usb_serial_jtag_write_bytes(
-                    (const uint8_t *)usb_line + sent,
-                    chunk, pdMS_TO_TICKS(100));
-                if (written <= 0) {
-                    ESP_LOGW(TAG, "USB response truncated (%u/%u bytes)",
-                             (unsigned)sent, (unsigned)usb_n);
-                    break;
-                }
-                sent += (size_t)written;
-            }
-        }
+    if (s_cmd_source == CMD_SOURCE_USB && s_usb_input_ready)
+    {
+        usb_write_all("JTAG ", 5);
+        usb_write_all(line, length);
     }
+}
+
+/* 固件常量与 Flash 媒体索引名称使用 UTF-8。 */
+static void uart_send_str(const char *msg)
+{
+    uart_send_encoded(msg, UART_ENCODING_UTF8);
+}
+
+/* FATFS ANSI/OEM API 返回的媒体路径使用 CP936/GBK。 */
+static void uart_send_gbk_str(const char *msg)
+{
+    uart_send_encoded(msg, UART_ENCODING_GBK);
 }
 
 static bool is_flash_video_mode(void)
@@ -113,6 +313,34 @@ static void stop_display_video(void)
 static void cmd_handle(const char *cmd)
 {
     ESP_LOGI(TAG, "CMD: [%s]", cmd);
+
+    /* === 当前链路的响应文本编码 === */
+    if (strcasecmp(cmd, "ENC") == 0 || strcasecmp(cmd, "ENC?") == 0)
+    {
+        char response[24];
+        snprintf(response, sizeof(response), "OK ENC %s",
+                 encoding_name(*current_output_encoding()));
+        uart_send_str(response);
+        return;
+    }
+    if (strcasecmp(cmd, "ENC UTF8") == 0 ||
+        strcasecmp(cmd, "ENC UTF-8") == 0)
+    {
+        *current_output_encoding() = UART_ENCODING_UTF8;
+        uart_send_str("OK ENC UTF8");
+        return;
+    }
+    if (strcasecmp(cmd, "ENC GBK") == 0)
+    {
+        *current_output_encoding() = UART_ENCODING_GBK;
+        uart_send_str("OK ENC GBK");
+        return;
+    }
+    if (strncasecmp(cmd, "ENC ", 4) == 0)
+    {
+        uart_send_str("ERR usage: ENC UTF8|GBK");
+        return;
+    }
 
     /* === Flash AVI视频 === */
     if (strcasecmp(cmd, "VLIST") == 0)
@@ -233,7 +461,7 @@ static void cmd_handle(const char *cmd)
         {
             char response[UART_LINE_SIZE + 16];
             snprintf(response, sizeof(response), "VIDLIST\r\n%s", list);
-            uart_send_str(response);
+            uart_send_gbk_str(response);
         }
         else if (count == 0)
             uart_send_str("VIDLIST NONE");
@@ -269,7 +497,7 @@ static void cmd_handle(const char *cmd)
             char response[UART_LINE_SIZE];
             snprintf(response, sizeof(response), "OK VID %s",
                      video_player_name());
-            uart_send_str(response);
+            uart_send_gbk_str(response);
         }
         else
         {
@@ -385,7 +613,7 @@ static void cmd_handle(const char *cmd)
         if (count > 0)
         {
             uart_send_str("IMGLIST");
-            uart_send_str(list);
+            uart_send_gbk_str(list);
         }
         else if (count == 0)
             uart_send_str("IMGLIST NONE");
@@ -436,7 +664,7 @@ static void cmd_handle(const char *cmd)
         if (n > 0)
         {
             uart_send_str("ALIST");
-            uart_send_str(list);
+            uart_send_gbk_str(list);
         }
         else if (n == 0)
             uart_send_str("ALIST NONE");
@@ -649,7 +877,7 @@ static void cmd_handle(const char *cmd)
         else
             snprintf(r, sizeof(r), "STATUS display=%s audio=stopped backlight=%u",
                      display, spilcd_backlight_get());
-        uart_send_str(r);
+        uart_send_gbk_str(r);
         return;
     }
     if (strcasecmp(cmd, "INFO") == 0)
@@ -823,6 +1051,11 @@ void app_uart_tick(void)
 void app_uart_send(const char *msg)
 {
     uart_send_str(msg);
+}
+
+void app_uart_send_gbk(const char *msg)
+{
+    uart_send_gbk_str(msg);
 }
 
 void app_uart_inject(const char *cmd)

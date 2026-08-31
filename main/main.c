@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -90,7 +91,10 @@ static void display_tick(void)
                      image_viewer_name(),
                      (unsigned long)image_viewer_width(),
                      (unsigned long)image_viewer_height());
-            app_uart_send(response);
+            if (strcmp(image_viewer_command(), "IMG") == 0)
+                app_uart_send_gbk(response);
+            else
+                app_uart_send(response);
             g_display_mode = DISPLAY_IDLE;
         }
         else if (image_state == IMAGE_VIEWER_ERROR)

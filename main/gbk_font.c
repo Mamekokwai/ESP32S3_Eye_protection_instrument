@@ -83,22 +83,16 @@ void gbk_show_font(uint16_t x, uint16_t y, const uint8_t *font, uint16_t color)
     if (gbk_font_get_glyph(font, dzk) != ESP_OK)
         return;
 
-    uint16_t y0 = y;
-    for (int t = 0; t < 32; t++)
+    /* GBK16 点阵为标准行优先: 16 行 × 每行 2 字节(16bit) = 32 字节。
+     * 每行高位字节在前、位序 MSB first, 这样才能正立、不镜像。 */
+    for (int row = 0; row < 16; row++)
     {
-        uint8_t temp = dzk[t];
-        for (int t1 = 0; t1 < 8; t1++)
+        uint16_t line = ((uint16_t)dzk[row * 2] << 8) | dzk[row * 2 + 1];
+        for (int col = 0; col < 16; col++)
         {
-            if (temp & 0x80)
-                spilcd_draw_point(x, y, color);
-            temp <<= 1;
-            y++;
-            if ((y - y0) == 16)
-            {
-                y = y0;
-                x++;
-                break;
-            }
+            if (line & 0x8000)
+                spilcd_draw_point(x + col, y + row, color);
+            line <<= 1;
         }
     }
 }

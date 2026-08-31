@@ -23,4 +23,5 @@ extern display_mode_t g_display_mode;
 void app_uart_init(void);
 void app_uart_tick(void);       /* 每 5ms: 接收 + 解析指令 */
 void app_uart_send(const char *msg);  /* 发送响应 */
+void app_uart_send_gbk(const char *msg); /* 发送含FATFS GBK路径的响应 */
 void app_uart_inject(const char *cmd); /* 注入指令, 模拟 CA51 发送 */
