@@ -652,12 +652,9 @@ player_ret_t video_player_tick(void)
         }
 
         int64_t now = esp_timer_get_time();
-        if (g_vp.last_write_ts && now < g_vp.last_write_ts + 17000)
-        {
-            if (g_vp.lcd_gate_wait_started_at == 0)
-                g_vp.lcd_gate_wait_started_at = now;
-            return PLAYER_BUSY;
-        }
+        /* next_ts 已按 AVI 帧周期限速，lcd_is_ready() 也会等待上一笔 DMA
+         * 完成；不再叠加固定 17 ms 间隔，否则高码率视频会额外损失约
+         * 5 ms/帧。 */
         if (!lcd_is_ready())
         {
             if (g_vp.lcd_gate_wait_started_at == 0)

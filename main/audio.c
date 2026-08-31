@@ -524,7 +524,7 @@ void audio_i2c_bus_recover(void)
     /* 先试推挽输出强驱高，测试脚是否被 ES8311 硬拉到地 */
     gpio_config_t pushpull = {
         .pin_bit_mask = BIT64(I2C_ES8311_SDA) | BIT64(I2C_ES8311_SCL),
-        .mode = GPIO_MODE_OUTPUT,
+        .mode = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
@@ -542,7 +542,7 @@ void audio_i2c_bus_recover(void)
     /* 再用开漏 + 上拉恢复 */
     gpio_config_t io_conf = {
         .pin_bit_mask = BIT64(I2C_ES8311_SDA) | BIT64(I2C_ES8311_SCL),
-        .mode = GPIO_MODE_OUTPUT_OD,   /* 开漏，模拟 I2C */
+        .mode = GPIO_MODE_INPUT_OUTPUT_OD, /* 开漏且保留输入采样 */
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
