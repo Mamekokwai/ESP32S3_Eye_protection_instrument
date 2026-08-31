@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "sd_card.h"
 #include "spilcd.h"
+#include "gbk_font.h"
 
 #define SD_BROWSER_ROWS_PER_PAGE 12
 #define SD_BROWSER_LINE_CHARS    35
@@ -38,17 +39,35 @@ static bool entry_is_directory(const struct dirent *entry)
 static void make_display_line(char *output, size_t output_size,
                               const struct dirent *entry, bool is_directory)
 {
+    /* 前缀 [D]/[F], 文件名保留原始 GBK 字节 (d_name 为 CODEPAGE_936),
+     * 由 gbk_show_string 渲染中文; 仅做长度截断防止越界。 */
     const char *prefix = is_directory ? "[D] " : "[F] ";
     size_t position = 0;
-
     while (*prefix && position + 1 < output_size)
         output[position++] = *prefix++;
-
     const unsigned char *name = (const unsigned char *)entry->d_name;
-    while (*name && position + 1 < output_size && position < SD_BROWSER_LINE_CHARS)
+    size_t name_bytes = 0;
+    while (name[0] && name_bytes + 1 < output_size &&
+           position + 1 < output_size && name_bytes < SD_BROWSER_LINE_CHARS * 2)
     {
-        output[position++] = (*name >= 32 && *name <= 126) ? (char)*name : '?';
-        name++;
+        if (name[0] > 0x80)
+        {
+            /* GBK 双字节汉字: 一次拷贝 2 字节 */
+            if (name[1] == 0 || position + 2 >= output_size)
+                break;
+            output[position++] = (char)name[0];
+            output[position++] = (char)name[1];
+            name += 2;
+            name_bytes += 2;
+        }
+        else
+        {
+            if (name[0] < 32)
+                break;
+            output[position++] = (char)name[0];
+            name += 1;
+            name_bytes += 1;
+        }
     }
     output[position] = '\0';
 }
@@ -135,11 +154,11 @@ esp_err_t sd_browser_show_page(int requested_page, int *shown_page,
         if (valid_index++ < skip)
             continue;
 
-        char line[SD_BROWSER_LINE_CHARS + 1];
+        char line[80];
         bool is_directory = entry_is_directory(entry);
         make_display_line(line, sizeof(line), entry, is_directory);
         uint16_t color = is_directory ? GREEN : BLACK;
-        spilcd_show_text16(40, 64 + row * 16, line, color, WHITE);
+        gbk_show_string(4, 64 + row * 16, 312, 16, line, color);
         row++;
     }
     closedir(directory);

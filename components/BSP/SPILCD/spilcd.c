@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 
 #define LCD_CS2 GPIO_NUM_18                 /* 右眼屏片选 (和 CS1=IO17 配合) */
 #define LCD_DUAL 1                          /* 0=单屏测试, 1=双屏同画面 */
@@ -79,14 +80,26 @@ esp_err_t spilcd_init(void)
              LCD_CS, LCD_CS2);
 #endif
 
-    /* TE 引脚配置 (IO1, LCD tearing effect 输入) */
-    gpio_config_t te_cfg = {
-        .pin_bit_mask = BIT64(LCD_TE),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    /* V1.4 背光: GPIO1 = PWM_LED, LEDC PWM 输出驱动 Q3 (PWM_LED->R17->Q3->LEDK).
+     * 旧 V1.1 曾把 GPIO1 配置为 TE 输入; V1.4 无 TE 引脚。 */
+    ledc_timer_config_t bl_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 1000, /* 1kHz, 无可见闪烁 */
+        .clk_cfg = LEDC_AUTO_CLK,
     };
-    gpio_config(&te_cfg);
+    ESP_ERROR_CHECK(ledc_timer_config(&bl_timer));
+    ledc_channel_config_t bl_ch = {
+        .gpio_num = LCD_BACKLIGHT,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 255, /* 默认 100% 亮度 */
+        .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&bl_ch));
+    ESP_LOGI(TAG, "Backlight: GPIO%d PWM 1kHz 100%% (V1.4)", LCD_BACKLIGHT);
 
     /* 1. 创建 i80 总线 */
     esp_lcd_i80_bus_handle_t i80_bus = NULL;
@@ -574,4 +587,14 @@ void spilcd_wait_te(void)
             return;
     }
 #endif
+}
+
+/* ---- V1.4 背光 PWM 调光 (GPIO1 -> Q3 -> LEDK) ---- */
+void spilcd_backlight_set(uint8_t percent)
+{
+    if (percent > 100)
+        percent = 100;
+    uint32_t duty = (uint32_t)percent * 255 / 100;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }

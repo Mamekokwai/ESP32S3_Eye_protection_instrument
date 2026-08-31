@@ -4,8 +4,8 @@
 #include "driver/gpio.h"
 
 
-/* 引脚定义 */
-#define LED0_GPIO_PIN    GPIO_NUM_2     /* LED0 GPIO (避开 IO1=LCD_TE) */
+/* 引脚定义: GPIO2 实际是功放 MUTE/使能 (V1.4), 不是心跳 LED; 勿作普通 LED 用 */
+#define LED0_GPIO_PIN    GPIO_NUM_2
 
 /* LED0端口定义 */
 #define LED0(x)          do { x ?                                \

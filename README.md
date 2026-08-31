@@ -1,6 +1,6 @@
 # ESP32-S3 眼保仪固件
 
-本项目是 YT06 V1.1 主板的 ESP-IDF v5.4.4 固件，目标芯片为 ESP32-S3-WROOM-1（16 MiB Flash、8 MiB Octal PSRAM）。设备驱动两块 320×320 JD9855 圆屏、ES8311 音频、TF 卡，并通过 CA51F352P4 发来的 UART 指令控制。
+本项目是 YT06 主板（V1.4 为当前硬件）的 ESP-IDF v5.4.4 固件，目标芯片为 ESP32-S3-WROOM-1（16 MiB Flash、8 MiB Octal PSRAM）。设备驱动两块 320×320 JD9855 圆屏、ES8311 音频、TF 卡，并通过 CA51F352P4 发来的 UART 指令控制。
 
 ## 当前实现
 
@@ -9,7 +9,8 @@
 - TF 媒体：SDMMC 1-bit 40 MHz，递归扫描全部子目录；支持 MJPEG AVI、PCM/MP3、Baseline JPEG。
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
-- 生产安全：可选的一次性、设备绑定 SD 授权令牌，配合 Secure Boot V2 和 Release 模式 Flash Encryption；开发构建默认关闭。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
+- 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
+- 生产安全：可选的一次性 **通用** SD 授权令牌（不绑定设备，一卡解锁所有设备；P-256 签名验证 + `EYECARE_UNLOCKED` eFuse），配合 Secure Boot V2 和 Release 模式 Flash Encryption；开发构建默认关闭。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 
 代码与文档的基准事实见 [CURRENT_IMPLEMENTATION.md](CURRENT_IMPLEMENTATION.md)，完整指令见 [UART_COMMANDS.md](UART_COMMANDS.md)，仓库与 Obsidian 的整理范围见 [DOCUMENTATION_ALIGNMENT.md](DOCUMENTATION_ALIGNMENT.md)。
 
@@ -20,7 +21,7 @@ main/                         应用状态机、UART、媒体播放与生产解�
 components/BSP/               LCD、SDMMC/SPI fallback、I2C 板级驱动
 components/esp_lcd_jd9855/    JD9855 面板驱动和初始化序列
 tools/linux/                  视频转换、Flash 媒体写入脚本
-tools/security/               生产授权令牌工具
+tools/security/               生产授权令牌工具（`unlock_token.py` + 一键脚本 `unlock_provision.sh`）
 partitions.csv                16 MiB Flash 分区表
 sdkconfig.defaults            开发/公共默认配置
 sdkconfig.production.defaults 生产安全增量配置
@@ -61,7 +62,7 @@ idf.py -B build-production \
 |---|---|
 | LCD DB0–DB7 | 6–13 |
 | LCD WR / D/C / CS1 / CS2 / RESET | 46 / 38 / 17 / 18 / 3 |
-| LCD TE | 1（当前禁用等待） |
+| 背光 PWM（V1.4，GPIO1 → Q3 → LEDK，LEDC 默认 100%） | 1 |
 | SDMMC CLK / CMD / D0 | 21 / 47 / 14 |
 | ES8311 I2C SDA / SCL | 4 / 5 |
 | I2S MCLK / BCLK / WS / DOUT | 45 / 39 / 41 / 42 |
@@ -69,7 +70,7 @@ idf.py -B build-production \
 | UART1 RX（业务输入） | 44 |
 | UART0 TX（日志/响应） | 43 |
 
-GPIO0 不参与当前 SDMMC 1-bit 数据传输。GPIO38 是 LCD D/C，不是 UART TX。
+GPIO0 不参与当前 SDMMC 1-bit 数据传输。GPIO38 是 LCD D/C，不是 UART TX。V1.4 无 TE 引脚（GPIO1 为背光 PWM，非 TE 帧同步）。
 
 ## 媒体约束
 

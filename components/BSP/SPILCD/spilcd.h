@@ -8,7 +8,7 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 
-/* YT06 V1.1: LCD 8080 8-bit 并口引脚 */
+/* YT06 V1.4: LCD 8080 8-bit 并口引脚 */
 #define LCD_DB0    GPIO_NUM_6
 #define LCD_DB1    GPIO_NUM_7
 #define LCD_DB2    GPIO_NUM_8
@@ -20,10 +20,14 @@
 #define LCD_WR     GPIO_NUM_46
 #define LCD_DC     GPIO_NUM_38
 #define LCD_CS     GPIO_NUM_17    /* CS1 */
-#define LCD_TE     GPIO_NUM_1
 #define LCD_RST    GPIO_NUM_3
 
-/* TE 帧同步开关: 0=关闭, 1=开启 (需同时改 esp_lcd_jd9855.c 中 0x35 参数) */
+/* V1.4 硬件: GPIO1 为背光 PWM (PWM_LED -> R17 -> Q3 -> LEDK), 无 TE 连接。
+ * 旧 V1.1 曾把 GPIO1 用作 TE; V1.4 起不再有 TE 帧同步。 */
+#define LCD_BACKLIGHT GPIO_NUM_1  /* 背光 PWM 输出, 驱动 Q3 */
+
+/* TE 帧同步: V1.4 无 TE 引脚, 保持关闭 (仅兼容旧代码) */
+#define LCD_TE     GPIO_NUM_1
 #define LCD_TE_ENABLE 0
 
 /* 颜色 */
@@ -57,6 +61,9 @@ void spilcd_show_num(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t 
 void spilcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint8_t size, char *p, uint16_t color);
 esp_err_t spilcd_show_text16(uint16_t x, uint16_t y, const char *text,
                              uint16_t foreground, uint16_t background);
-void spilcd_wait_te(void);  /* TE 帧同步 */
+void spilcd_wait_te(void);  /* V1.4 无 TE, 空实现 (兼容) */
+
+/* V1.4 背光: GPIO1 PWM 调光 (0-100, 默认 100) */
+void spilcd_backlight_set(uint8_t percent);
 
 #endif

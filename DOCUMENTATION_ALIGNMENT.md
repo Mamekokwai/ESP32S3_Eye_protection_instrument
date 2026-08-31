@@ -1,16 +1,18 @@
-# 文档一致性清单（2026-08-31）
+# 文档一致性清单（2026-09-01）
 
 ## 仓库当前文档
 
 | 文档 | 状态 | 作用 |
 |---|---|---|
-| `CURRENT_IMPLEMENTATION.md` | 当前基准 | 硬件、总线、媒体、分区事实表 |
-| `README.md` | 已对齐 | 构建、目录、引脚、媒体限制 |
-| `UART_COMMANDS.md` | 已对齐 | 全部当前指令、递归路径、并发规则 |
-| `SECURITY_PROVISIONING.md` | 新增 | 密钥分工、令牌、生产构建、不可逆烧录与验收 |
-| `info/Map/media_pipeline_archify.md` | 已对齐 | 媒体与生产启动链路 |
+| `CURRENT_IMPLEMENTATION.md` | 当前基准 | 硬件、总线、媒体、分区事实表（已含 V1.4 背光 GPIO1） |
+| `README.md` | 已对齐 | 构建、目录、引脚、媒体限制（V1.4、背光、通用令牌） |
+| `UART_COMMANDS.md` | 已对齐 | 全部当前指令、递归路径、并发规则（背光已改 ESP32 控制） |
+| `SECURITY_PROVISIONING.md` | 已对齐 | 密钥分工、通用令牌、生产构建、不可逆烧录与验收 |
+| `AGENTS.md` | 已对齐 | 含"文档-固件同步规则"章节 |
+| `CLAUDE.md` / `CODEBUDDY.md` | 已对齐 | 开发助手入口，指向 V1.4 与统一基准 |
+| `info/Map/media_pipeline_archify.md` | 已对齐 | 媒体与生产启动链路（通用令牌） |
 | `info/Map/sd-resource-rule.architecture.json` + HTML | 已同步 | TF 递归目录及当前工具路径 |
-| `CLAUDE.md` / `CODEBUDDY.md` / `AGENTS.md` | 已对齐 | 开发助手入口，指向统一基准 |
+| `info/Map/production-unlock.html` + JSON | 已同步 | 生产解锁生命周期图（通用令牌） |
 
 ## Obsidian 项目文档
 
@@ -22,11 +24,12 @@
 - `软件设计/ESP 32-S 3 UART 指令手册.md`
 - `软件设计/SDMMC.md`
 - `软件设计/TF卡配置要点.md`
-- `软件设计/生产安全与一次性解锁.md`
-- `环境配置/烧录方法.md`
-- `硬件设计/电气引脚V1.0.md`
+- `软件设计/生产安全与一次性解锁.md`：通用令牌 + 启动门流程（无卡`请插入SD卡` / 未解锁`请解密`，内嵌 GBK 字库）。
+- `环境配置/烧录方法.md`：通用令牌 + 一键脚本 `unlock_provision.sh`。
+- `项目简介.md`：V1.4、背光 GPIO1、通用令牌、启动门。
+- `硬件设计/关键硬件网络连接.md`（新增 2026-09-01）：V1.4 网络表权威；屏连接器 P1/P2 → MCU 脚位、U10 QFN56 pin→GPIO 全表、U7 外设、背光链路、通用网络、核对清单。
 
-已补充当前安全构建边界：`环境配置/环境配置检查指南.md`。
+硬件引脚旧笔记 `硬件设计/电气引脚V1.0.md` 保留为历史版本（V1.4 以 `关键硬件网络连接.md` 为准）。
 
 以下保留历史内容，但已显式标记为历史/归档，不能作为当前接线或固件依据：
 
@@ -43,7 +46,10 @@ RCA 文档保留故障发生时的上下文。原空白的 `问题分析/AVI 和
 - QSPI/单屏/无 TF/MAX98357 历史方案与当前 i80 双屏/SDMMC/ES8311 混写。
 - TF 当前协议写成 SPI 20 MHz、媒体仅根目录。
 - LCD WR/TE/RESET、TF CMD/D0、UART TX、USB 引脚角色错误。
+- **背光归属冲突**：旧 V1.1 背光由 CA51 控制、GPIO1 作 TE；V1.4 无 TE、GPIO1 为 ESP32 LEDC 背光 PWM（固件已适配，`LCD_BACKLIGHT`）。
+- **令牌绑定冲突**：设备绑定令牌 → 通用令牌（不绑定设备，一卡解锁所有设备）。
+- **编码冲突**：FATFS UTF-8 → CODEPAGE_936/GBK（`d_name` 为 GBK），支持屏幕中文（内嵌提示字库 + `/SYSTEM/FONT/GBK16.FON` SDLIST 文件名）；媒体递归路径、UART 中文输出改为 GBK，文档由 "UTF-8 路径" 一并改写为 "GBK 路径"。
 - 文档存在不存在的 `BL`、USB 业务输入、`tools/convert.sh`。
 - `idf.py flash` 被误写为自动进入 monitor。
 - 开发与生产分区偏移混用；生产签名 bootloader 空间不足。
-- 把 SD 上的私钥误当作安全解锁方案；现改为离线私钥签发设备绑定令牌。
+- 把 SD 上的私钥误当作安全解锁方案；现改为离线私钥签发通用令牌。

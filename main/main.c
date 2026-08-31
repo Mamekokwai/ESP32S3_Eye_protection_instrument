@@ -20,6 +20,9 @@
 #include "image_viewer.h"
 #include "app_uart.h"
 #include "production_unlock.h"
+#include "gbk_font.h"
+#include "esp_efuse.h"
+#include "esp_efuse_custom_table.h"
 
 #define TAG "app"
 
@@ -120,28 +123,70 @@ static void monitor_tick(void)
                  audio_player_is_active());
 }
 
+/* ====== 启动门: SD 卡检测 + 解密检测 ======
+ * 链路: 检查SD卡 → 未插入则提示并重试
+ *              → 已插入 → 检查解密 → 未解密则提示并重试
+ *                                    → 已解密 → 进入正常启动
+ * 提示用内嵌 GBK 字库 (无卡也显示): gbk_embedded_font.h */
+static void boot_gate(void)
+{
+    while (1)
+    {
+        /* 1. 检查 SD 卡 */
+        esp_err_t sd_ret = sd_card_mount();
+        if (sd_ret != ESP_OK)
+        {
+            ESP_LOGW(TAG, "SD card absent; waiting for card");
+            gbk_show_boot_text(88, 150, BLACK); /* 白底黑字: 请插入SD卡 */
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
+        /* 2. 检查解密 (仅加密开启时) */
+#if EYECARE_ENABLE_ENCRYPTION
+        if (!esp_efuse_read_field_bit(ESP_EFUSE_USER_DATA_EYECARE_UNLOCKED))
+        {
+            ESP_LOGW(TAG, "Device locked; waiting for unlock token");
+            gbk_show_unlock_text(120, 150, BLACK); /* 白底黑字: 请解密 */
+            if (production_unlock_ensure())
+            {
+                spilcd_clear(WHITE);
+                return; /* 已解锁, 进入系统 */
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        if (!production_unlock_ensure())
+        {
+            /* 安全 eFuse 未启用时生产锁失败, 直接放行开发板 */
+            ESP_LOGE(TAG, "Production unlock unavailable");
+        }
+#endif
+
+        return; /* 卡已插入 + 已解锁 → 正常启动 */
+    }
+}
+
 /* ====== 主入口 ====== */
 void app_main(void)
 {
-    /* 量产锁定设备在此之前只运行 SD 卡签名令牌验证。
-     * 加密系统总开关: main/production_unlock.h 的 EYECARE_ENABLE_ENCRYPTION
-     * （默认跟随 Kconfig CONFIG_EYECARE_PRODUCTION_LOCK; 关闭时本调用直接通过）。 */
-    if (!production_unlock_ensure())
-    {
-        ESP_LOGE(TAG, "Production unlock failed");
-        return;
-    }
+    /* 硬件初始化: 先 LCD (背光/显示), 再进入启动门 */
+    ESP_LOGI(TAG, "LCD init");
+    spilcd_init();
 
-    /* 硬件初始化 */
+    /* 启动门: 无卡提示 / 未解锁提示, 直到条件满足 */
+    boot_gate();
+
+    /* 中文字库: 从 TF 卡 /SYSTEM/FONT/GBK16.FON 加载 (SD 已就绪) */
+    gbk_font_init();
+
+    /* 音频初始化 */
     ESP_LOGI(TAG, "audio init");
     esp_err_t audio_ret = audio_init();
     if (audio_ret != ESP_OK)
         ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue",
                  esp_err_to_name(audio_ret));
     ESP_ERROR_CHECK(audio_player_start_service());
-
-    ESP_LOGI(TAG, "LCD init");
-    spilcd_init();
 
     ESP_LOGI(TAG, "SD mount...");
     esp_err_t sd_ret = sd_card_mount();

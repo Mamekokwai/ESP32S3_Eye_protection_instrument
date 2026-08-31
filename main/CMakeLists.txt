@@ -6,6 +6,7 @@ idf_component_register(
         "audio_player.c"
         "media_catalog.c"
         "flash_media.c"
+        "gbk_font.c"
         "mp3_decoder_wrapper.cpp"
         "sd_browser.c"
         "image_viewer.c"
@@ -19,4 +20,4 @@ idf_component_register(
     # "testimage_data.c"
     INCLUDE_DIRS "." "include"
     EMBED_FILES "canon.pcm"
-    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support)
+    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support fatfs vfs)

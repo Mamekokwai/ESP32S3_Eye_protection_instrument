@@ -15,7 +15,12 @@ INDEX_SIZE = 4096
 MAX_ENTRIES = 63
 NAME_SIZE = 48
 MAGIC = b"FMD1"
-VERSION = 1
+VERSION = 2  # v2: 支持可选 GBK16 字库区 (位于索引区后, 媒体前)
+FONT_HEADER = b"GBK16F"   # 6 字节字库区头
+FONT_GLYPH = 32           # 16x16 点阵每字 32 字节
+FONT_ROWS = 126           # 区号 0x81-0xFE
+FONT_COLS = 190           # 位号 0x40-0xFE 跳过 0x7F
+FONT_SIZE = FONT_GLYPH * FONT_ROWS * FONT_COLS  # 766,080 字节
 
 HEADER = struct.Struct("<4sHHHHI")
 ENTRY = struct.Struct("<BBHIII48s")
@@ -76,15 +81,35 @@ def fill(output, count: int, value: int = 0xFF) -> None:
         count -= size
 
 
-def build_image(output_path: Path, input_paths: list[Path], max_size: int) -> None:
+def build_image(
+    output_path: Path, input_paths: list[Path], max_size: int,
+    font_path: Path | None = None,
+) -> None:
     if not input_paths:
         raise ValueError("至少需要一个AVI或JPEG文件")
     if len(input_paths) > MAX_ENTRIES:
         raise ValueError(f"文件数超过上限{MAX_ENTRIES}")
 
+    # 字库区: 索引区后固定 4KB 对齐, 766,080 字节 (GBK16.FON)
+    font_offset = 0
+    font_data = b""
+    if font_path is not None:
+        if not font_path.is_file():
+            raise ValueError(f"字库文件不存在: {font_path}")
+        font_data = font_path.read_bytes()
+        if len(font_data) != FONT_SIZE:
+            raise ValueError(
+                f"GBK16字库大小必须为{FONT_SIZE}字节, 实际{len(font_data)}"
+            )
+        font_offset = INDEX_SIZE  # 4KB 对齐
+        if font_offset + len(font_data) > max_size:
+            raise ValueError("字库超出storage分区")
+        print(f"字库: 偏移0x{font_offset:06X}, {len(font_data)}字节")
+
     media: list[Media] = []
     names: set[str] = set()
-    next_offset = INDEX_SIZE
+    next_offset = font_offset + len(font_data) if font_data else INDEX_SIZE
+    next_offset = align_up(next_offset, INDEX_SIZE)
     for raw_path in input_paths:
         path = raw_path.expanduser().resolve()
         if not path.is_file():
@@ -140,6 +165,13 @@ def build_image(output_path: Path, input_paths: list[Path], max_size: int) -> No
         output.write(header)
         output.write(entries)
         fill(output, INDEX_SIZE - output.tell())
+        if font_data:
+            # 字库区头: "GBK16F" + 保留2字节 (占8字节, 4KB对齐区起始)
+            output.write(FONT_HEADER)
+            output.write(b"\0\0")
+            output.write(font_data)
+            if output.tell() < next_offset:
+                fill(output, next_offset - output.tell())
         for item in media:
             if output.tell() < item.offset:
                 fill(output, item.offset - output.tell())
@@ -172,6 +204,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("output", type=Path, help="输出bin文件")
     parser.add_argument("inputs", nargs="+", type=Path, help="按顺序排列的媒体文件")
     parser.add_argument(
+        "--font", type=Path, default=None,
+        help="可选: GBK16.FON 字库文件 (766,080字节), 放在索引区后",
+    )
+    parser.add_argument(
         "--max-size",
         type=int,
         default=14 * 1024 * 1024,
@@ -183,7 +219,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        build_image(args.output, args.inputs, args.max_size)
+        build_image(args.output, args.inputs, args.max_size, args.font)
     except (OSError, ValueError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)
         return 1

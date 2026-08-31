@@ -1,6 +1,6 @@
 # ESP32-S3 眼保仪媒体与生产启动链路
 
-当前代码基准：ESP-IDF v5.4.4，YT06 V1.1，双 320×320 JD9855。更细的事实表见仓库根目录 `CURRENT_IMPLEMENTATION.md`。
+当前代码基准：ESP-IDF v5.4.4，YT06 V1.4，双 320×320 JD9855。更细的事实表见仓库根目录 `CURRENT_IMPLEMENTATION.md`。
 
 ## 启动入口
 
@@ -64,7 +64,7 @@ flowchart LR
 
 ## 目录规则
 
-- `VIDLIST`、`IMGLIST`、`ALIST` 递归遍历挂载点，返回 UTF-8 相对路径；序号随 FAT 遍历结果变化。
+- `VIDLIST`、`IMGLIST`、`ALIST` 递归遍历挂载点，返回 GBK 相对路径（FATFS CODEPAGE_936）；序号随 FAT 遍历结果变化。
 - `VID`、`IMG`、`APLAY` 接受序号或相对路径，稳定产品配置宜使用路径。
-- `SDLIST` 是独立 LCD 浏览器，目前只显示 TF 根目录。
+- `SDLIST` 是独立 LCD 浏览器，目前只显示 TF 根目录（可用 GBK 字库显示中文文件名）。
 - 转换脚本是 `tools/linux/convert_mp4_to_avi.sh`，不是旧的 `tools/convert.sh`。

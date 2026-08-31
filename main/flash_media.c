@@ -251,3 +251,25 @@ const uint8_t *flash_media_data(const flash_media_entry_t *entry)
     return s_partition_data + entry->offset;
 }
 
+const uint8_t *flash_media_font_data(void)
+{
+    if (flash_media_init() != ESP_OK)
+        return NULL;
+    if (s_legacy_mode)
+        return NULL; /* 旧镜像无字库区 */
+
+    /* 字库区在索引区后: "GBK16F\0\0" + 766,080 字节点阵 */
+    const uint8_t *font_area = s_partition_data + FLASH_MEDIA_INDEX_SIZE;
+    if (s_partition->size <
+        FLASH_MEDIA_INDEX_SIZE + FLASH_MEDIA_FONT_MAGIC_SIZE)
+        return NULL;
+    if (memcmp(font_area, FLASH_MEDIA_FONT_MAGIC,
+               sizeof(FLASH_MEDIA_FONT_MAGIC) - 1U) != 0)
+        return NULL;
+    if (s_partition->size <
+        FLASH_MEDIA_INDEX_SIZE + FLASH_MEDIA_FONT_MAGIC_SIZE +
+            FLASH_MEDIA_FONT_SIZE)
+        return NULL;
+    return font_area + FLASH_MEDIA_FONT_MAGIC_SIZE;
+}
+
