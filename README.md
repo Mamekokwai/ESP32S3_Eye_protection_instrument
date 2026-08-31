@@ -10,6 +10,7 @@
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
 - 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
+- 启动显示：无 TF 卡时提示“请插入SD卡”；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
 - 生产安全：可选的一次性 **通用** SD 授权令牌（不绑定设备，一卡解锁所有设备；P-256 签名验证 + `EYECARE_UNLOCKED` eFuse），配合 Secure Boot V2 和 Release 模式 Flash Encryption；开发构建默认关闭。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 
 代码与文档的基准事实见 [CURRENT_IMPLEMENTATION.md](CURRENT_IMPLEMENTATION.md)，完整指令见 [UART_COMMANDS.md](UART_COMMANDS.md)，仓库与 Obsidian 的整理范围见 [DOCUMENTATION_ALIGNMENT.md](DOCUMENTATION_ALIGNMENT.md)。
@@ -42,6 +43,20 @@ Linux 媒体工具：
 ./tools/linux/convert_mp4_to_avi.sh input.mp4
 ./tools/linux/flash_video.sh output.avi
 ```
+
+Windows PowerShell 媒体烧录：
+
+```powershell
+# 使用 tools/windows/flash_video.conf 中的配置
+.\tools\windows\flash_video.ps1
+
+# 临时覆盖串口、波特率和媒体文件
+.\tools\windows\flash_video.ps1 -Port COM16 -Baud 921600 video.avi image.jpg
+```
+
+若 PowerShell 执行策略阻止脚本，可在当前终端运行
+`Set-ExecutionPolicy -Scope Process Bypass`。该工具只写入 `storage` 媒体分区，
+不会烧录应用固件或修改 eFuse。
 
 生产构建必须使用独立配置文件和构建目录；不要让仓库根目录的开发 `sdkconfig` 覆盖安全默认值：
 

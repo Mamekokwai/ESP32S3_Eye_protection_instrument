@@ -13,7 +13,8 @@
 
 #define TAG "flash_media"
 #define FLASH_MEDIA_MAGIC   0x31444D46U /* "FMD1" */
-#define FLASH_MEDIA_VERSION 1U
+#define FLASH_MEDIA_VERSION_V1 1U
+#define FLASH_MEDIA_VERSION_V2 2U
 
 typedef struct
 {
@@ -117,7 +118,10 @@ esp_err_t flash_media_init(void)
         return s_init_result;
     }
 
-    if (header->version != FLASH_MEDIA_VERSION ||
+    /* v2 keeps the v1 index/entry layout and only reserves an optional
+     * GBK16 font area between the index and the first media payload. */
+    if ((header->version != FLASH_MEDIA_VERSION_V1 &&
+         header->version != FLASH_MEDIA_VERSION_V2) ||
         header->entry_size != sizeof(flash_media_entry_t) ||
         header->index_size != FLASH_MEDIA_INDEX_SIZE ||
         header->entry_count == 0 ||
@@ -153,8 +157,8 @@ esp_err_t flash_media_init(void)
             images++;
     }
     s_init_result = ESP_OK;
-    ESP_LOGI(TAG, "Index ready: %u files, %d AVI, %d JPEG",
-             s_entry_count, videos, images);
+    ESP_LOGI(TAG, "Index v%u ready: %u files, %d AVI, %d JPEG",
+             header->version, s_entry_count, videos, images);
     return ESP_OK;
 }
 

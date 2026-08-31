@@ -188,18 +188,22 @@ void app_main(void)
                  esp_err_to_name(audio_ret));
     ESP_ERROR_CHECK(audio_player_start_service());
 
-    ESP_LOGI(TAG, "SD mount...");
-    esp_err_t sd_ret = sd_card_mount();
-    if (sd_ret != ESP_OK)
-        ESP_LOGW(TAG, "SD mount failed: %s", esp_err_to_name(sd_ret));
-
     app_uart_init();
 
     /* 上电自动播放 */
-    if (flash_player_init() == ESP_OK)
+    esp_err_t auto_play_ret = flash_player_init();
+    if (auto_play_ret == ESP_OK)
     {
         g_display_mode = DISPLAY_VIDEO_PLAYING;
         ESP_LOGI(TAG, "Auto VPLAY OK");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Auto VPLAY unavailable: %s",
+                 esp_err_to_name(auto_play_ret));
+        spilcd_clear(WHITE);
+        spilcd_show_text16(112, 136, "READY", BLUE, WHITE);
+        spilcd_show_text16(88, 168, "NO FLASH VIDEO", BLACK, WHITE);
     }
 
     s_tick_sem = xSemaphoreCreateBinary();

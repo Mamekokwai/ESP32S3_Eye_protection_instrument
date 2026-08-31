@@ -12,7 +12,7 @@
 | 背光 | V1.4：GPIO1=PWM_LED，LEDC PWM（1 kHz/8bit）→ Q3 → LEDK；默认 100%，`spilcd_backlight_set()` 调光 | `components/BSP/SPILCD/spilcd.c` |
 | TF 卡 | 首选 SDMMC 1-bit 40 MHz：CLK=21、CMD=47、D0=14；SPI fallback 最高 20 MHz | `components/BSP/SD_CARD/` |
 | 音频 | ES8311；I2C 4/5，I2S MCLK45/BCLK39/WS41/DOUT42，功放 GPIO2 高有效 | `main/audio.c` |
-| UART | UART1 只接收 GPIO44；UART0 GPIO43 输出日志/响应 | `main/app_uart.c` |
+| UART | UART1 只接收 GPIO44；UART0 GPIO43 输出日志/响应；支持 `BL <0-100>` 调节背光 | `main/app_uart.c` |
 
 GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用。任何声称“TF 当前为 SPI 20 MHz”“UART TX 为 GPIO38”或“USB 直接输入业务指令”的说明均不适用于当前版本。
 
@@ -20,10 +20,10 @@ GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用
 
 | 项目 | 当前实现 |
 |---|---|
-| 启动门 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：无 SD 卡显示白底黑字`请插入SD卡`重试；加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。提示用内嵌 GBK16 点阵字库（无卡也显示） |
+| 启动门 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：无 SD 卡显示白底黑字`请插入SD卡`重试；加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。TF 卡只挂载一次，避免使已打开的字库句柄失效；Flash 自动视频不可用时显示 `READY / NO FLASH VIDEO`，不再保持黑屏。提示用内嵌 GBK16 点阵字库（无卡也显示） |
 | 中文字库 | ① 内嵌 `gbk_embedded_font.h`（启动提示字），② TF 卡 `/SYSTEM/FONT/GBK16.FON`（完整 GBK16 字库，SDLIST 任意中文文件名）。FATFS 用 CODEPAGE_936 + ANSI/OEM，`d_name` 返回 GBK 双字节 |
 | 主循环 | 1 ms tick，5 个 cooperative workspace；视频每 1 ms 快速服务 |
-| Flash 视频 | AVI/MJPEG，mmap `storage`，PSRAM 双帧，2×40 行内部 SRAM DMA 条带 |
+| Flash 视频 | AVI/MJPEG，mmap `storage`，兼容媒体索引 v1/v2，PSRAM 双帧，2×40 行内部 SRAM DMA 条带 |
 | TF 视频 | MJPEG AVI ≤320×320，32 KiB 流读取，PSRAM 双帧，1×160 行 DMA 条带 |
 | 图片 | Baseline JPEG ≤1 MiB、≤320×320，32 KiB 分块读，1×80 行 DMA 条带 |
 | 音频 | TF `.pcm/.mp3`，CPU1 独立 5 ms 服务，ES8311 固定输出链路 |

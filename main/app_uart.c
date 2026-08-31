@@ -8,7 +8,7 @@
  *
  * 指令: VLIST / VPLAY / FIMGLIST / FIMG
  *       VIDLIST / VID / VPAUSE / VRESUME / VSTOP
- *       APLAY / ALIST / ASTOP / AMUTE / VOL / SDLIST / IMGLIST / IMG
+ *       APLAY / ALIST / ASTOP / AMUTE / VOL / BL / SDLIST / IMGLIST / IMG
  *       RST / STATUS / INFO / SLEEP / WAKE
  */
 
@@ -477,6 +477,35 @@ static void cmd_handle(const char *cmd)
             snprintf(r, sizeof(r), "ERR VOL %s", esp_err_to_name(ret));
             uart_send_str(r);
         }
+        return;
+    }
+
+    /* === LCD 背光亮度 (V1.4 GPIO1 PWM, 0=灭, 100=全亮) === */
+    if (strcasecmp(cmd, "BL") == 0)
+    {
+        uart_send_str("ERR usage: BL <0-100>");
+        return;
+    }
+    if (strncasecmp(cmd, "BL ", 3) == 0)
+    {
+        char *end = NULL;
+        long value = strtol(cmd + 3, &end, 10);
+        while (end && (*end == ' ' || *end == '\t'))
+            end++;
+        if (end == cmd + 3 || (end && *end != '\0'))
+        {
+            uart_send_str("ERR usage: BL <0-100>");
+            return;
+        }
+        if (value < 0 || value > 100)
+        {
+            uart_send_str("ERR BL range 0-100");
+            return;
+        }
+        spilcd_backlight_set((uint8_t)value);
+        char response[32];
+        snprintf(response, sizeof(response), "OK BL %ld", value);
+        uart_send_str(response);
         return;
     }
 
