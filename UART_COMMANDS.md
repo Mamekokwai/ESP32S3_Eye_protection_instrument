@@ -1,6 +1,6 @@
 # ESP32-S3 UART 指令手册
 
-固件通过 UART0 RX、UART1 RX（两者当前均映射 GPIO44）和原生 USB Serial-JTAG 接收 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）输出日志和文本响应；可直接在 `idf.py monitor` 或 USB Serial-JTAG 终端中输入命令。UART0 可用时优先处理 UART0，并丢弃 UART1 镜像数据；USB 通道独立接收，确保每条命令只执行一次。
+固件通过 UART1 RX（GPIO44）和原生 USB Serial-JTAG 独立接收 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）和 USB Serial-JTAG 同时输出文本响应；两路输入使用独立缓冲，可同时接收。
 
 接收行缓冲为 544 字节（包含结尾 `\0`）；超长行会被丢弃。响应通常以 `\r\n` 结束。
 
@@ -24,10 +24,11 @@
 | `AMUTE` | 切换静音；功放 GPIO2 随状态切换 |
 | `VOL <0-100>` | 设置音量 |
 | `BL <0-100>` | 设置 LCD 背光亮度；0 为关闭，100 为全亮 |
+| `BL` / `BL?` | 查询当前 LCD 背光亮度，返回 `OK BL <value>` |
 | `SDLIST [page]` | 在 LCD 分页浏览 TF 卡根目录，页码从 1 开始 |
-| `STATUS` | 查询显示状态和音频状态 |
+| `STATUS` | 查询显示、音频和背光状态 |
 | `INFO` | 查询剩余堆内存 |
-| `SLEEP` / `WAKE` | 进入/退出休眠画面；`SLEEP` 同时停止音频 |
+| `SLEEP` / `WAKE` | 进入/退出休眠画面；`SLEEP` 同时停止音频并关闭背光，`WAKE` 恢复休眠前亮度 |
 | `RST` | 重启 ESP32 |
 
 诊断指令 `GPIO4 <0/1>`、`GPIO5 [0/1]`（别名 `G5`）、`I2CTEST`、`I2CFIX` 只用于产线/示波器排障，不属于正常产品协议。V1.4 背光由 ESP32 GPIO1（PWM_LED → Q3 → LEDK）控制，默认 100% 亮度；可通过 `BL <0-100>` 调节。

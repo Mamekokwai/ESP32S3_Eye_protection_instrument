@@ -590,11 +590,19 @@ void spilcd_wait_te(void)
 }
 
 /* ---- V1.4 背光 PWM 调光 (GPIO1 -> Q3 -> LEDK) ---- */
+static uint8_t s_backlight_percent = 100;
+
 void spilcd_backlight_set(uint8_t percent)
 {
     if (percent > 100)
         percent = 100;
+    s_backlight_percent = percent;
     uint32_t duty = (uint32_t)percent * 255 / 100;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+uint8_t spilcd_backlight_get(void)
+{
+    return s_backlight_percent;
 }

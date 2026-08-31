@@ -65,5 +65,6 @@ void spilcd_wait_te(void);  /* V1.4 无 TE, 空实现 (兼容) */
 
 /* V1.4 背光: GPIO1 PWM 调光 (0-100, 默认 100) */
 void spilcd_backlight_set(uint8_t percent);
+uint8_t spilcd_backlight_get(void);
 
 #endif

@@ -43,14 +43,14 @@
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 512
 #define UART_LINE_SIZE 544
-#define UART0_RX_PIN GPIO_NUM_44
-#define UART0_TX_PIN GPIO_NUM_43
 
 /* ---- 指令缓冲 ---- */
 static char g_line[UART_LINE_SIZE];
 static int g_pos = 0;
-static bool s_uart0_input_ready;
+static char g_usb_line[UART_LINE_SIZE];
+static int g_usb_pos = 0;
 static bool s_usb_input_ready;
+static uint8_t s_sleep_backlight = 100;
 
 /* ====== 内部 ====== */
 
@@ -58,6 +58,14 @@ static bool s_usb_input_ready;
 static void uart_send_str(const char *msg)
 {
     printf("%s\r\n", msg);
+    /* 移交协议要求 USB Serial-JTAG 与 UART0 同步收到响应。 */
+    if (s_usb_input_ready) {
+        char line[UART_LINE_SIZE];
+        int n = snprintf(line, sizeof(line), "%s\r\n", msg);
+        if (n > 0)
+            usb_serial_jtag_write_bytes((const uint8_t *)line,
+                                        (size_t)n, 0);
+    }
 }
 
 static bool is_flash_video_mode(void)
@@ -486,9 +494,11 @@ static void cmd_handle(const char *cmd)
     }
 
     /* === LCD 背光亮度 (V1.4 GPIO1 PWM, 0=灭, 100=全亮) === */
-    if (strcasecmp(cmd, "BL") == 0)
+    if (strcasecmp(cmd, "BL") == 0 || strcasecmp(cmd, "BL?") == 0)
     {
-        uart_send_str("ERR usage: BL <0-100>");
+        char response[32];
+        snprintf(response, sizeof(response), "OK BL %u", spilcd_backlight_get());
+        uart_send_str(response);
         return;
     }
     if (strncasecmp(cmd, "BL ", 3) == 0)
@@ -611,11 +621,11 @@ static void cmd_handle(const char *cmd)
         const char *af = audio_player_current_file();
         char r[UART_LINE_SIZE];
         if (af)
-            snprintf(r, sizeof(r), "STATUS display=%s audio=%s",
-                     display, af);
+            snprintf(r, sizeof(r), "STATUS display=%s audio=%s backlight=%u",
+                     display, af, spilcd_backlight_get());
         else
-            snprintf(r, sizeof(r), "STATUS display=%s audio=stopped",
-                     display);
+            snprintf(r, sizeof(r), "STATUS display=%s audio=stopped backlight=%u",
+                     display, spilcd_backlight_get());
         uart_send_str(r);
         return;
     }
@@ -628,6 +638,9 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "SLEEP") == 0)
     {
+        if (g_display_mode != DISPLAY_SLEEP)
+            s_sleep_backlight = spilcd_backlight_get();
+        spilcd_backlight_set(0);
         stop_display_video();
         if (audio_player_is_active())
             audio_player_stop();
@@ -643,6 +656,7 @@ static void cmd_handle(const char *cmd)
     {
         if (g_display_mode == DISPLAY_SLEEP)
         {
+            spilcd_backlight_set(s_sleep_backlight);
             g_display_mode = DISPLAY_IDLE;
             spilcd_clear(BLACK);
             spilcd_show_string(40, 140, 280, 170, 16, "ESP32-S3 Eye", BLUE);
@@ -660,23 +674,23 @@ static void cmd_handle(const char *cmd)
 /* ====== 公开 API ====== */
 
 /* ---- 单字符指令解析 ---- */
-static void feed_char(char ch)
+static void feed_char(char ch, char *line, int *pos)
 {
     if (ch == '\n' || ch == '\r')
     {
-        if (g_pos > 0)
+        if (*pos > 0)
         {
-            g_line[g_pos] = 0;
-            while (g_pos > 0 && g_line[g_pos - 1] == ' ')
-                g_line[--g_pos] = 0;
-            if (g_pos > 0)
-                cmd_handle(g_line);
-            g_pos = 0;
+            line[*pos] = 0;
+            while (*pos > 0 && line[*pos - 1] == ' ')
+                line[--(*pos)] = 0;
+            if (*pos > 0)
+                cmd_handle(line);
+            *pos = 0;
         }
     }
-    else if (g_pos < (int)sizeof(g_line) - 1)
+    else if (*pos < UART_LINE_SIZE - 1)
     {
-        g_line[g_pos++] = ch;
+        line[(*pos)++] = ch;
     }
 }
 
@@ -696,6 +710,7 @@ void app_uart_init(void)
 
     /* UART0 控制台在部分 ESP-IDF 配置中只使用 ROM/低层输出，并未安装
      * UART 驱动。安装后才能安全调用 uart_read_bytes() 接收 monitor 输入。 */
+    #if 0
     if (!uart_is_driver_installed(UART_NUM_0))
     {
         esp_err_t ret = uart_driver_install(
@@ -720,6 +735,7 @@ void app_uart_init(void)
 
     /* 原生 Type-C 的 USB Serial-JTAG 通道。若 ESP-IDF 控制台尚未安装
      * 驱动，则由业务 UART 初始化主动安装一个非阻塞驱动。 */
+    #endif
     if (!usb_serial_jtag_is_driver_installed())
     {
         usb_serial_jtag_driver_config_t usb_cfg =
@@ -743,10 +759,8 @@ void app_uart_init(void)
     // /* TODO: USB-serial-JTAG 启用后设 stdin 为非阻塞 */
     // fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d (UART0=%s USB-JTAG=%s)",
-             UART_RX_PIN, UART_BAUD,
-             s_uart0_input_ready ? "ready" : "off",
-             s_usb_input_ready ? "ready" : "off");
+    ESP_LOGI(TAG, "UART1 RX=IO%d @%d + USB-JTAG (independent, %s)",
+             UART_RX_PIN, UART_BAUD, s_usb_input_ready ? "ready" : "off");
 }
 
 void app_uart_tick(void)
@@ -755,10 +769,10 @@ void app_uart_tick(void)
      * UART0；随后丢弃 UART1 中同一物理信号产生的镜像字节，避免每条
      * 命令执行两次。若 UART0 不可用，则回退到 UART1。 */
     uint8_t uch;
-    if (s_uart0_input_ready)
+    if (false)
     {
         while (uart_read_bytes(UART_NUM_0, &uch, 1, 0) > 0)
-            feed_char((char)uch);
+            feed_char((char)uch, g_line, &g_pos);
         /* UART1 仍由外部控制器兼容保留，但 GPIO44 上的数据已由 UART0
          * 消费；清空其接收 FIFO，防止长期运行后溢出。 */
         if (UART_PORT != UART_NUM_0)
@@ -767,14 +781,14 @@ void app_uart_tick(void)
     else
     {
         while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
-            feed_char((char)uch);
+            feed_char((char)uch, g_line, &g_pos);
     }
 
     /* 原生 Type-C USB Serial-JTAG 输入 */
     if (s_usb_input_ready)
     {
         while (usb_serial_jtag_read_bytes(&uch, 1, 0) > 0)
-            feed_char((char)uch);
+            feed_char((char)uch, g_usb_line, &g_usb_pos);
     }
 }
 
