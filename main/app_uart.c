@@ -552,7 +552,7 @@ static void cmd_handle(const char *cmd)
     {
         gpio_config_t cfg = {
             .pin_bit_mask = BIT64(5),
-            .mode = GPIO_MODE_OUTPUT,
+            .mode = GPIO_MODE_INPUT_OUTPUT,
             .pull_up_en = GPIO_PULLUP_DISABLE,
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type = GPIO_INTR_DISABLE,
@@ -571,7 +571,7 @@ static void cmd_handle(const char *cmd)
         v = (v != 0);
         gpio_config_t cfg = {
             .pin_bit_mask = BIT64(5),
-            .mode = GPIO_MODE_OUTPUT,
+            .mode = GPIO_MODE_INPUT_OUTPUT,
             .pull_up_en = GPIO_PULLUP_DISABLE,
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type = GPIO_INTR_DISABLE,
@@ -590,7 +590,7 @@ static void cmd_handle(const char *cmd)
         v = (v != 0);
         gpio_config_t cfg = {
             .pin_bit_mask = BIT64(4),
-            .mode = GPIO_MODE_OUTPUT,
+            .mode = GPIO_MODE_INPUT_OUTPUT,
             .pull_up_en = GPIO_PULLUP_DISABLE,
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type = GPIO_INTR_DISABLE,

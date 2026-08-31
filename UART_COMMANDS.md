@@ -170,8 +170,8 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | 指令 | 作用 | 风险 |
 | --- | --- | --- |
 | `GPIO5` / `G5` | 翻转 GPIO5 电平 | GPIO5 是 ES8311 I2C SCL，会中断音频控制 |
-| `GPIO5 <0/1>` | 强制设置 GPIO5 | 会把 I2C SCL 改成普通输出 |
-| `GPIO4 <0/1>` | 强制设置 GPIO4 | GPIO4 是 ES8311 I2C SDA，会破坏 I2C 通信 |
+| `GPIO5 <0/1>` | 强制设置 GPIO5 并回读引脚实际电平 | 会把 I2C SCL 改成普通推挽输出 |
+| `GPIO4 <0/1>` | 强制设置 GPIO4 并回读引脚实际电平 | GPIO4 是 ES8311 I2C SDA，会破坏 I2C 通信 |
 | `I2CTEST` | 启动或停止约 1 kHz 的 ES8311 I2C 读测试 | 仅供示波器观察，增加总线负载 |
 | `I2CFIX` | 对 I2C 总线执行 GPIO 恢复脉冲 | 会暂时接管 SDA/SCL 引脚 |
 

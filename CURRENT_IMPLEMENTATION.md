@@ -16,6 +16,7 @@
 
 GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用。任何声称“TF 当前为 SPI 20 MHz”或“UART TX 为 GPIO38”的说明均不适用于当前版本。
 
+
 ## 软件与媒体
 
 UART 业务链路已调整为 UART1（CA51，RX GPIO44/TX GPIO43）和 USB Serial-JTAG（电脑）双通道独立收发；UART0 不参与业务通信。
@@ -23,6 +24,8 @@ UART 业务链路已调整为 UART1（CA51，RX GPIO44/TX GPIO43）和 USB Seria
 SD 视频播放器的 LCD DMA 条带缓冲在播放器生命周期内持久复用，连续执行 `VID 1`、`VID 2` 等切换不会重复申请内部 DMA 内存。
 
 SD 视频流水线由 CPU0 执行主循环和 TF 读取，CPU1 执行 JPEG 解码；JPEG 解码任务优先级 4，低于 CPU1 音频任务优先级 5，使读取与解码并行且音频优先。
+
+ES8311 初始化在 I2C 地址 `0x18` 未应答时每 1 秒重试一次；应答后才继续 I2S、codec 和播放链路初始化。
 
 SD 视频只使用 AVI `SecPerFrame` 做帧率控制，并以 LCD DMA 完成事件作为下一帧提交门控；已移除重复的固定 17 ms LCD 间隔，避免高码率视频额外降帧。
 
