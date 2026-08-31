@@ -12,7 +12,7 @@
 | 背光 | V1.4：GPIO1=PWM_LED，LEDC PWM（1 kHz/8bit）→ Q3 → LEDK；默认 100%，`spilcd_backlight_set()` 调光 | `components/BSP/SPILCD/spilcd.c` |
 | TF 卡 | 首选 SDMMC 1-bit 40 MHz：CLK=21、CMD=47、D0=14；SPI fallback 最高 20 MHz | `components/BSP/SD_CARD/` |
 | 音频 | ES8311；I2C 4/5，I2S MCLK45/BCLK39/WS41/DOUT42，功放 GPIO2 高有效 | `main/audio.c` |
-| UART | UART1 只接收 GPIO44；UART0 GPIO43 输出日志/响应；支持 `BL <0-100>` 调节背光 | `main/app_uart.c` |
+| UART | UART1 接收 GPIO44，UART0 同时接收控制台命令并由 GPIO43 输出日志/响应；支持 `BL <0-100>` 调节背光 | `main/app_uart.c` |
 
 GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用。任何声称“TF 当前为 SPI 20 MHz”“UART TX 为 GPIO38”或“USB 直接输入业务指令”的说明均不适用于当前版本。
 

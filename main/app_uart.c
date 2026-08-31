@@ -2,9 +2,9 @@
  * @brief  UART 指令系统 — 接收 CA51F352P4 指令, 驱动屏幕
  *
  * CA51F352P4 TX → IO44 → UART1 RX
- * 调试输出: printf → UART0 TX (IO43)
+ * PC/调试输入也可走 UART0 RX；调试输出: printf → UART0 TX (IO43)
  *
- * TODO: 启用 USB-serial-JTAG 后 stdout→USB, stdin→USB (双源收指令)
+ * UART0 与 UART1 共用同一命令行解析器，便于直接从 idf.py monitor 调试。
  *
  * 指令: VLIST / VPLAY / FIMGLIST / FIMG
  *       VIDLIST / VID / VPAUSE / VRESUME / VSTOP
@@ -692,20 +692,24 @@ void app_uart_init(void)
     // /* TODO: USB-serial-JTAG 启用后设 stdin 为非阻塞 */
     // fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    ESP_LOGI(TAG, "UART1 RX=IO%d @%d", UART_RX_PIN, UART_BAUD);
+    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d", UART_RX_PIN, UART_BAUD);
 }
 
 void app_uart_tick(void)
 {
-    // /* TODO: USB-serial-JTAG 启用后从 stdin 读用户指令 */
-    // char ch;
-    // while (read(STDIN_FILENO, &ch, 1) > 0)
-    //     feed_char(ch);
-
     /* UART1 IO44 (CA51F352P4 指令) */
     uint8_t uch;
     while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
         feed_char((char)uch);
+
+    /* UART0 控制台输入（idf.py monitor/USB-UART）也接入同一解析器。
+     * UART0 驱动由 ESP-IDF 控制台初始化；若某个构建关闭了 UART0
+     * 控制台，uart_read_bytes() 只返回错误，不会影响 UART1。 */
+    if (UART_PORT != UART_NUM_0)
+    {
+        while (uart_read_bytes(UART_NUM_0, &uch, 1, 0) > 0)
+            feed_char((char)uch);
+    }
 }
 
 void app_uart_send(const char *msg)

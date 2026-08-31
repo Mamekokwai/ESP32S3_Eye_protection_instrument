@@ -49,7 +49,7 @@ RCA 文档保留故障发生时的上下文。原空白的 `问题分析/AVI 和
 - **背光归属冲突**：旧 V1.1 背光由 CA51 控制、GPIO1 作 TE；V1.4 无 TE、GPIO1 为 ESP32 LEDC 背光 PWM（固件已适配，`LCD_BACKLIGHT`）。
 - **令牌绑定冲突**：设备绑定令牌 → 通用令牌（不绑定设备，一卡解锁所有设备）。
 - **编码冲突**：FATFS UTF-8 → CODEPAGE_936/GBK（`d_name` 为 GBK），支持屏幕中文（内嵌提示字库 + `/SYSTEM/FONT/GBK16.FON` SDLIST 文件名）；媒体递归路径、UART 中文输出改为 GBK，文档由 "UTF-8 路径" 一并改写为 "GBK 路径"。
-- 文档存在不存在的 `BL`、USB 业务输入、`tools/convert.sh`。
+- 文档仍存在待清理的 `tools/convert.sh` 表述；`BL` 和 UART0 控制台业务输入已在当前固件实现。
 - `idf.py flash` 被误写为自动进入 monitor。
 - 开发与生产分区偏移混用；生产签名 bootloader 空间不足。
 - 把 SD 上的私钥误当作安全解锁方案；现改为离线私钥签发通用令牌。
