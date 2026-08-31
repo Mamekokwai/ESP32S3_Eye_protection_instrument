@@ -42,10 +42,13 @@
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 512
 #define UART_LINE_SIZE 544
+#define UART0_RX_PIN GPIO_NUM_44
+#define UART0_TX_PIN GPIO_NUM_43
 
 /* ---- 指令缓冲 ---- */
 static char g_line[UART_LINE_SIZE];
 static int g_pos = 0;
+static bool s_uart0_input_ready;
 
 /* ====== 内部 ====== */
 
@@ -689,10 +692,35 @@ void app_uart_init(void)
     uart_param_config(UART_PORT, &cfg);
     uart_set_pin(UART_PORT, UART_PIN_NO_CHANGE, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
+    /* UART0 控制台在部分 ESP-IDF 配置中只使用 ROM/低层输出，并未安装
+     * UART 驱动。安装后才能安全调用 uart_read_bytes() 接收 monitor 输入。 */
+    if (!uart_is_driver_installed(UART_NUM_0))
+    {
+        esp_err_t ret = uart_driver_install(
+            UART_NUM_0, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 0, NULL, 0);
+        if (ret == ESP_OK)
+        {
+            uart_param_config(UART_NUM_0, &cfg);
+            uart_set_pin(UART_NUM_0, UART0_TX_PIN, UART0_RX_PIN,
+                         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+            s_uart0_input_ready = true;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "UART0 input unavailable: %s",
+                     esp_err_to_name(ret));
+        }
+    }
+    else
+    {
+        s_uart0_input_ready = true;
+    }
+
     // /* TODO: USB-serial-JTAG 启用后设 stdin 为非阻塞 */
     // fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d", UART_RX_PIN, UART_BAUD);
+    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d (UART0 input=%s)",
+             UART_RX_PIN, UART_BAUD, s_uart0_input_ready ? "ready" : "off");
 }
 
 void app_uart_tick(void)
@@ -705,7 +733,7 @@ void app_uart_tick(void)
     /* UART0 控制台输入（idf.py monitor/USB-UART）也接入同一解析器。
      * UART0 驱动由 ESP-IDF 控制台初始化；若某个构建关闭了 UART0
      * 控制台，uart_read_bytes() 只返回错误，不会影响 UART1。 */
-    if (UART_PORT != UART_NUM_0)
+    if (UART_PORT != UART_NUM_0 && s_uart0_input_ready)
     {
         while (uart_read_bytes(UART_NUM_0, &uch, 1, 0) > 0)
             feed_char((char)uch);
