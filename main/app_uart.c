@@ -725,17 +725,22 @@ void app_uart_init(void)
 
 void app_uart_tick(void)
 {
-    /* UART1 IO44 (CA51F352P4 指令) */
+    /* UART0 与 UART1 当前都映射到 GPIO44。UART0 驱动可用时优先读取
+     * UART0；随后丢弃 UART1 中同一物理信号产生的镜像字节，避免每条
+     * 命令执行两次。若 UART0 不可用，则回退到 UART1。 */
     uint8_t uch;
-    while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
-        feed_char((char)uch);
-
-    /* UART0 控制台输入（idf.py monitor/USB-UART）也接入同一解析器。
-     * UART0 驱动由 ESP-IDF 控制台初始化；若某个构建关闭了 UART0
-     * 控制台，uart_read_bytes() 只返回错误，不会影响 UART1。 */
-    if (UART_PORT != UART_NUM_0 && s_uart0_input_ready)
+    if (s_uart0_input_ready)
     {
         while (uart_read_bytes(UART_NUM_0, &uch, 1, 0) > 0)
+            feed_char((char)uch);
+        /* UART1 仍由外部控制器兼容保留，但 GPIO44 上的数据已由 UART0
+         * 消费；清空其接收 FIFO，防止长期运行后溢出。 */
+        if (UART_PORT != UART_NUM_0)
+            uart_flush_input(UART_PORT);
+    }
+    else
+    {
+        while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
             feed_char((char)uch);
     }
 }
