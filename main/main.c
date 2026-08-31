@@ -123,7 +123,9 @@ static void monitor_tick(void)
 /* ====== 主入口 ====== */
 void app_main(void)
 {
-    /* 量产锁定设备在此之前只运行 SD 卡签名令牌验证。 */
+    /* 量产锁定设备在此之前只运行 SD 卡签名令牌验证。
+     * 加密系统总开关: main/production_unlock.h 的 EYECARE_ENABLE_ENCRYPTION
+     * （默认跟随 Kconfig CONFIG_EYECARE_PRODUCTION_LOCK; 关闭时本调用直接通过）。 */
     if (!production_unlock_ensure())
     {
         ESP_LOGE(TAG, "Production unlock failed");

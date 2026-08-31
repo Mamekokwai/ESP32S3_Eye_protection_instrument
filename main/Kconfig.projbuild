@@ -5,10 +5,12 @@ menu "Eye-care production security"
         default n
         select EFUSE_CUSTOM_TABLE
         help
+            Enables EYECARE_ENABLE_ENCRYPTION in main/production_unlock.h.
             On a device whose permanent unlock eFuse is not set, start only
-            the SD-card unlock loop. A device-bound ECDSA P-256 token must be
-            present at /eyecare.unlock. Successful verification burns the
-            one-way unlock eFuse and normal application startup continues.
+            the SD-card unlock loop. A shared ECDSA P-256 signed token must
+            be present at /eyecare.unlock (not device-bound; one card unlocks
+            every device). Successful verification burns the one-way unlock
+            eFuse and normal application startup continues.
 
     config EYECARE_UNLOCK_RETRY_MS
         int "Unlock token retry interval (ms)"
