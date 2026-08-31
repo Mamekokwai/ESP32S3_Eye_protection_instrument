@@ -20,4 +20,4 @@ idf_component_register(
     # "testimage_data.c"
     INCLUDE_DIRS "." "include"
     EMBED_FILES "canon.pcm"
-    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support fatfs vfs)
+    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support fatfs vfs esp_driver_usb_serial_jtag)

@@ -24,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "spilcd.h"
@@ -49,6 +50,7 @@
 static char g_line[UART_LINE_SIZE];
 static int g_pos = 0;
 static bool s_uart0_input_ready;
+static bool s_usb_input_ready;
 
 /* ====== 内部 ====== */
 
@@ -716,11 +718,35 @@ void app_uart_init(void)
         s_uart0_input_ready = true;
     }
 
+    /* 原生 Type-C 的 USB Serial-JTAG 通道。若 ESP-IDF 控制台尚未安装
+     * 驱动，则由业务 UART 初始化主动安装一个非阻塞驱动。 */
+    if (!usb_serial_jtag_is_driver_installed())
+    {
+        usb_serial_jtag_driver_config_t usb_cfg =
+            USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+        esp_err_t ret = usb_serial_jtag_driver_install(&usb_cfg);
+        if (ret != ESP_OK)
+        {
+            ESP_LOGW(TAG, "USB Serial-JTAG input unavailable: %s",
+                     esp_err_to_name(ret));
+        }
+        else
+        {
+            s_usb_input_ready = true;
+        }
+    }
+    else
+    {
+        s_usb_input_ready = true;
+    }
+
     // /* TODO: USB-serial-JTAG 启用后设 stdin 为非阻塞 */
     // fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d (UART0 input=%s)",
-             UART_RX_PIN, UART_BAUD, s_uart0_input_ready ? "ready" : "off");
+    ESP_LOGI(TAG, "UART0 RX + UART1 RX=IO%d @%d (UART0=%s USB-JTAG=%s)",
+             UART_RX_PIN, UART_BAUD,
+             s_uart0_input_ready ? "ready" : "off",
+             s_usb_input_ready ? "ready" : "off");
 }
 
 void app_uart_tick(void)
@@ -741,6 +767,13 @@ void app_uart_tick(void)
     else
     {
         while (uart_read_bytes(UART_PORT, &uch, 1, 0) > 0)
+            feed_char((char)uch);
+    }
+
+    /* 原生 Type-C USB Serial-JTAG 输入 */
+    if (s_usb_input_ready)
+    {
+        while (usb_serial_jtag_read_bytes(&uch, 1, 0) > 0)
             feed_char((char)uch);
     }
 }

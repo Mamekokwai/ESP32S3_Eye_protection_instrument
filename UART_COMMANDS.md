@@ -1,6 +1,6 @@
 # ESP32-S3 UART 指令手册
 
-固件通过 UART0 RX 和 UART1 RX（两者当前均映射 GPIO44）接收 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）输出日志和文本响应；可直接在 `idf.py monitor` 中输入命令。UART0 可用时优先处理 UART0，并丢弃 UART1 镜像数据，确保一条命令只执行一次；UART1 仍兼容 CA51F352P4 外部控制器。
+固件通过 UART0 RX、UART1 RX（两者当前均映射 GPIO44）和原生 USB Serial-JTAG 接收 ASCII 指令，115200-8N1，大小写不敏感，以 `\n` 或 `\r\n` 结束。UART0 TX（GPIO43）输出日志和文本响应；可直接在 `idf.py monitor` 或 USB Serial-JTAG 终端中输入命令。UART0 可用时优先处理 UART0，并丢弃 UART1 镜像数据；USB 通道独立接收，确保每条命令只执行一次。
 
 接收行缓冲为 544 字节（包含结尾 `\0`）；超长行会被丢弃。响应通常以 `\r\n` 结束。
 
