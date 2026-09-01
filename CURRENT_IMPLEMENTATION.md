@@ -52,7 +52,7 @@ SD 视频只使用 AVI `SecPerFrame` 做帧率控制，并以 LCD DMA 完成事�
 | `storage` | 0x110000 | 0x120000 | 14 MiB | Flash FAT 媒体，生产配置下加密 |
 | `nvs_keys` | 0xF10000 | 0xF20000 | 4 KiB | NVS 加密密钥，生产配置下加密 |
 
-当前只有 factory 应用分区，没有 OTA 槽。开发默认配置不启用生产锁；生产配置由 `sdkconfig.production.defaults` 叠加启用。
+当前只有 factory 应用分区，没有 OTA 槽。开发配置和当前生产增量配置均关闭生产锁及 Secure Boot/Flash Encryption；待量产流程确认后，才允许恢复 `sdkconfig.production.defaults` 中的安全选项。
 
 ## 文档状态规则
 

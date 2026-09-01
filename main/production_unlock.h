@@ -19,9 +19,13 @@
  * ============================================================
  */
 
-/* ===== 生产加密开关: 1 打开, 0 关闭 ===== */
-#define EYECARE_ENABLE_ENCRYPTION 0
-/* #define EYECARE_ENABLE_ENCRYPTION CONFIG_EYECARE_PRODUCTION_LOCK  // 跟随 Kconfig */
+/* ===== 生产加密开关：跟随 Kconfig =====
+ * 开发配置默认关闭；生产配置通过 sdkconfig.production.defaults 打开。
+ * 不要在这里硬编码为 1，否则开发版会因缺少安全配置而无法编译。 */
+#ifndef CONFIG_EYECARE_PRODUCTION_LOCK
+#define CONFIG_EYECARE_PRODUCTION_LOCK 0
+#endif
+#define EYECARE_ENABLE_ENCRYPTION CONFIG_EYECARE_PRODUCTION_LOCK
 
 /**
  * @brief Block until this device is permanently unlocked.

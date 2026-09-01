@@ -12,7 +12,7 @@
 - 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
 - UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
 - 启动显示：无 TF 卡时提示“请插入SD卡”；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
-- 生产安全：可选的一次性 **通用** SD 授权令牌（不绑定设备，一卡解锁所有设备；P-256 签名验证 + `EYECARE_UNLOCKED` eFuse），配合 Secure Boot V2 和 Release 模式 Flash Encryption；开发构建默认关闭。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
+- 生产安全：代码支持一次性 **通用** SD 授权令牌（P-256 签名验证 + `EYECARE_UNLOCKED` eFuse）及 Secure Boot V2/Release Flash Encryption；当前开发与生产增量配置均暂时关闭，待量产流程确认后再启用。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 
 代码与文档的基准事实见 [CURRENT_IMPLEMENTATION.md](CURRENT_IMPLEMENTATION.md)，完整指令见 [UART_COMMANDS.md](UART_COMMANDS.md)，仓库与 Obsidian 的整理范围见 [DOCUMENTATION_ALIGNMENT.md](DOCUMENTATION_ALIGNMENT.md)。
 

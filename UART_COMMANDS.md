@@ -2,9 +2,9 @@
 
 当前通信架构：CA51 使用 UART1（RX=GPIO44、TX=GPIO43）与 ESP32 双向通信；电脑使用原生 USB Serial-JTAG 双向调试。两路独立缓冲、共用命令解析器，响应返回各自来源通道；UART0 不参与业务通信。
 
-USB Serial-JTAG 返回的协议响应统一带有 `JTAG ` 前缀（例如 `JTAG OK VID 1.avi`）；UART1 返回给 CA51 的响应不带此前缀。系统日志仍保持原有 `I/W/E` 格式。
+USB Serial-JTAG 返回的协议响应统一带有 `JTAG` 前缀（例如 `JTAG OK VID 1.avi`）；UART1 返回给 CA51 的响应不带此前缀。系统日志仍保持原有 `I/W/E` 格式。
 
-本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令关键字为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。响应只返回发出该指令的链路，每条响应以 `\r\n` 结束。
+本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。响应同时输出到 UART0 和 USB，每条响应以 `\r\n` 结束。
 
 ## 通信参数
 
@@ -13,26 +13,11 @@ USB Serial-JTAG 返回的协议响应统一带有 `JTAG ` 前缀（例如 `JTAG 
 | 电气电平 | 3.3 V TTL UART，空闲状态为高电平；不是 RS-232 电平 |
 | 串口格式 | 115200 bit/s、8 数据位、无校验、1 停止位、无流控 |
 | ESP32 指令输入 | GPIO44，UART1 RX |
-| ESP32 对 CA51 的响应输出 | GPIO43，UART1 TX |
+| ESP32 响应/日志输出 | GPIO43，UART0 TX |
 | 原生 USB | GPIO19 D-、GPIO20 D+，Linux `/dev/ttyACM*` |
-| 数据方向 | UART1、USB 均双向；响应返回指令来源链路 |
-| 默认响应编码 | UART1：GBK；USB Serial-JTAG：UTF-8 |
+| 数据方向 | UART1/USB → ESP32；响应输出到 UART0/USB |
 
 GPIO19/20 原生 USB Serial/JTAG 在 Linux 上通常为 `/dev/ttyACM0`，可用于烧录、日志监控和输入 `VPLAY`、`BL` 等业务指令。UART1 与 USB 使用独立命令缓冲，可同时接收。
-
-## 响应文本编码
-
-TF 卡使用 FATFS CODEPAGE_936，目录名和文件名在固件内部为 GBK 字节。固件可在每条通信链路输出前将 GBK 中文转换成 UTF-8；ASCII 内容在两种模式下完全相同。
-
-| 指令 | 说明 | 成功响应 |
-| --- | --- | --- |
-| `ENC` / `ENC?` | 查询当前链路的输出编码 | `OK ENC UTF8` 或 `OK ENC GBK` |
-| `ENC UTF8` / `ENC UTF-8` | 将当前链路的协议响应设为 UTF-8 | `OK ENC UTF8` |
-| `ENC GBK` | 将当前链路的协议响应设为 GBK | `OK ENC GBK` |
-
-UART1 与 USB 的编码模式相互独立：UART1 默认 GBK，以兼容 CA51；USB Serial-JTAG 默认 UTF-8，方便 VS Code/ESP-IDF Monitor 正确显示中文。配置只在本次运行中有效，ESP32 重启后恢复默认值。`ENC` 只影响协议响应（包括 `VIDLIST`、`IMGLIST`、`ALIST` 中的中文路径），不改变 ESP-IDF 的 `I/W/E` 系统日志编码。
-
-该功能是输出编码转换，不会转换接收到的文件名参数。控制端直接发送中文路径时仍需使用固件内部的 GBK 字节；跨终端调试建议使用 `VID 1`、`IMG 1`、`APLAY 1` 等数字序号。
 
 ## 主控芯片接入说明
 

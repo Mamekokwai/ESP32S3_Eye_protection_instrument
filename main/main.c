@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "audio.h"
 #include "spilcd.h"
@@ -26,6 +27,31 @@
 #include "esp_efuse_custom_table.h"
 
 #define TAG "app"
+
+/* 将 ESP-IDF 的复位枚举转换为便于现场排查的文字。 */
+static const char *reset_reason_name(esp_reset_reason_t reason)
+{
+    switch (reason)
+    {
+    case ESP_RST_UNKNOWN:    return "UNKNOWN";
+    case ESP_RST_POWERON:    return "POWERON";
+    case ESP_RST_EXT:        return "EXTERNAL";
+    case ESP_RST_SW:         return "SOFTWARE";
+    case ESP_RST_PANIC:      return "PANIC";
+    case ESP_RST_INT_WDT:    return "INT_WDT";
+    case ESP_RST_TASK_WDT:   return "TASK_WDT";
+    case ESP_RST_WDT:        return "OTHER_WDT";
+    case ESP_RST_DEEPSLEEP:  return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:   return "BROWNOUT";
+    case ESP_RST_SDIO:       return "SDIO";
+    case ESP_RST_USB:        return "USB";
+    case ESP_RST_JTAG:       return "JTAG";
+    case ESP_RST_EFUSE:      return "EFUSE";
+    case ESP_RST_PWR_GLITCH: return "POWER_GLITCH";
+    case ESP_RST_CPU_LOCKUP: return "CPU_LOCKUP";
+    default:                 return "UNRECOGNIZED";
+    }
+}
 
 /* ====== 1ms Tick (Semaphore, 不忙等, 不丢 tick) ====== */
 #include "freertos/semphr.h"
@@ -174,6 +200,11 @@ static void boot_gate(void)
 /* ====== 主入口 ====== */
 void app_main(void)
 {
+    /* 尽早记录上一次复位原因；USB monitor 断线重连后可据此判断根因。 */
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    ESP_LOGW(TAG, "Reset reason: %d (%s)", reset_reason,
+             reset_reason_name(reset_reason));
+
     /* 硬件初始化: 先 LCD (背光/显示), 再进入启动门 */
     ESP_LOGI(TAG, "LCD init");
     spilcd_init();

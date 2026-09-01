@@ -1,5 +1,7 @@
 # 生产安全与一次性解锁
 
+> 当前状态（硬件测试阶段）：`sdkconfig.production.defaults` 已关闭生产解锁、Secure Boot、Flash Encryption 和 NVS 加密。以下内容是后续量产启用安全功能时的流程说明；在未完成评审前不要烧录生产配置，也不要写入 eFuse。
+
 ## 目标与边界
 
 生产镜像首次运行时只挂载 TF 卡并反复验证根目录的 `/eyecare.unlock`。令牌验证成功后烧写不可清除的 `EYECARE_UNLOCKED` eFuse 位，再进入 LCD、音频、UART 和媒体主程序。后续上电直接读取该位，不再需要 TF 卡或令牌。令牌**不绑定设备**：同一张卡可用于解锁所有已量产的设备，只要其 P-256 签名能通过固件内嵌公钥验证。
