@@ -825,16 +825,24 @@ void video_player_stop(void)
     /* 通知解码任务退出 */
     if (s_decode_q && s_decode_task)
     {
+        TaskHandle_t decode_task_handle = s_decode_task;
         decode_job_t shutdown = {NULL, 0, NULL, ESP_OK};
         xQueueSend(s_decode_q, &shutdown, portMAX_DELAY);
         int wait = 0;
-        while (eTaskGetState(s_decode_task) != eDeleted && wait < 100)
+        while (eTaskGetState(decode_task_handle) != eDeleted && wait < 1000)
         {
             vTaskDelay(pdMS_TO_TICKS(1));
             wait++;
         }
         /* 自删除任务的栈由 Idle 任务回收；让出一个 tick，避免下一次
          * VID 立即创建 jpeg_sd 时误报 ESP_ERR_NO_MEM。 */
+        if (eTaskGetState(decode_task_handle) != eDeleted)
+        {
+            /* Do not destroy the queue/decoder while JPEG decode may still
+             * be running. Force-delete only after the graceful timeout. */
+            ESP_LOGW(TAG, "JPEG decode task did not stop in 1 s; deleting it");
+            vTaskDelete(decode_task_handle);
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
         s_decode_task = NULL;
     }

@@ -574,16 +574,24 @@ void flash_player_stop(void)
 
     if (s_q && s_task)
     {
+        TaskHandle_t decode_task_handle = s_task;
         decode_job_t shutdown = {NULL, 0, NULL, ESP_OK};
         xQueueSend(s_q, &shutdown, portMAX_DELAY);
         int wait = 0;
-        while (eTaskGetState(s_task) != eDeleted && wait < 100)
+        while (eTaskGetState(decode_task_handle) != eDeleted && wait < 1000)
         {
             vTaskDelay(pdMS_TO_TICKS(1));
             wait++;
         }
         /* 任务自删除后由 Idle 回收其栈，避免紧接着切换到 SD 视频时
          * 内部 RAM 暂未归还。 */
+        if (eTaskGetState(decode_task_handle) != eDeleted)
+        {
+            /* Do not destroy the queue/decoder while JPEG decode may still
+             * be running. Force-delete only after the graceful timeout. */
+            ESP_LOGW(TAG, "JPEG decode task did not stop in 1 s; deleting it");
+            vTaskDelete(decode_task_handle);
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
         s_task = NULL;
     }
