@@ -741,7 +741,17 @@ static void cmd_handle(const char *cmd)
     }
     if (strncasecmp(cmd, "VOL ", 4) == 0)
     {
-        int v = atoi(cmd + 4);
+        char *end = NULL;
+        long parsed = strtol(cmd + 4, &end, 10);
+        while (end && (*end == ' ' || *end == '\t'))
+            end++;
+        if (end == cmd + 4 || (end && *end != '\0'))
+        {
+            uart_send_str("ERR usage: VOL <0-100>");
+            return;
+        }
+        int v = (parsed < INT_MIN) ? INT_MIN :
+                (parsed > INT_MAX) ? INT_MAX : (int)parsed;
         if (v < 0)
             v = 0;
         if (v > 100)
