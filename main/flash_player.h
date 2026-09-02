@@ -28,5 +28,8 @@ player_ret_t flash_player_tick(void);
  */
 void flash_player_stop(void);
 
+/** Reclaim strip buffers after any pending LCD DMA has completed. */
+void flash_player_reclaim_buffers(void);
+
 /* ---- 兼容旧 API ---- */
 esp_err_t flash_video_play(void);

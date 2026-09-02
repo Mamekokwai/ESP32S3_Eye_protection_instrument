@@ -194,6 +194,21 @@ static fp_ctx_t g_fp = {0};
 static uint16_t *s_strip_buf[FP_STRIP_BUFS];
 static uint32_t s_strip_release_after[FP_STRIP_BUFS];
 
+void flash_player_reclaim_buffers(void)
+{
+    for (int i = 0; i < FP_STRIP_BUFS; i++)
+    {
+        if (s_strip_buf[i] && s_strip_release_after[i] != 0 &&
+            refresh_done_count >= s_strip_release_after[i])
+        {
+            heap_caps_free(s_strip_buf[i]);
+            s_strip_buf[i] = NULL;
+            s_strip_release_after[i] = 0;
+            ESP_LOGI(TAG, "Reclaimed delayed LCD strip buffer %d", i);
+        }
+    }
+}
+
 /* ====== 公开 API ====== */
 
 int flash_player_list_files(char *output, size_t output_size)
@@ -208,6 +223,7 @@ const char *flash_player_name(void)
 
 esp_err_t flash_player_start(const char *selection)
 {
+    flash_player_reclaim_buffers();
     if (g_fp.initialized)
         flash_player_stop();
     memset(&g_fp, 0, sizeof(g_fp));

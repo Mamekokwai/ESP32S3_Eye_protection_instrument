@@ -53,5 +53,8 @@ player_ret_t video_player_tick(void);
  */
 void video_player_stop(void);
 
+/** Reclaim strip buffers after any pending LCD DMA has completed. */
+void video_player_reclaim_buffers(void);
+
 /* ---- 兼容旧 API (阻塞版, 仅供过渡) ---- */
 esp_err_t video_player_play(const char *filename);

@@ -158,7 +158,18 @@ static esp_err_t allocate_display_buffers(void)
         64, IMAGE_FRAME_BYTES, MALLOC_CAP_SPIRAM);
     s_image.strip = heap_caps_aligned_alloc(
         64, IMAGE_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    return s_image.frame && s_image.strip ? ESP_OK : ESP_ERR_NO_MEM;
+    if (!s_image.frame || !s_image.strip)
+    {
+        ESP_LOGE(TAG,
+                 "Image buffers OOM: PSRAM free/largest=%u/%u, "
+                 "DMA free/largest=%u/%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 esp_err_t image_viewer_start(const char *selection)

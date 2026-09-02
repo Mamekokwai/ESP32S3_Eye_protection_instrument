@@ -259,6 +259,8 @@ void app_main(void)
     while (1)
     {
         xSemaphoreTake(s_tick_sem, portMAX_DELAY); /* 阻塞等 1ms tick, 让出 CPU 给 idle */
+        video_player_reclaim_buffers();
+        flash_player_reclaim_buffers();
         if (++ws >= WS_NUM)
             ws = 0;
 

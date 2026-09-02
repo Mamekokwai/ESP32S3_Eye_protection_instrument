@@ -124,6 +124,22 @@ static uint8_t *s_refill_buf = NULL; /* DMA 对齐读取缓冲 */
 /* LCD DMA 条带缓冲在视频切换时持久复用。停止瞬间 DMA 可能尚未回调，
  * 因此不能释放后立即重建，也不能丢失其指针。 */
 static uint16_t *s_strip_buf[VP_STRIP_BUFS];
+static uint32_t s_strip_release_after[VP_STRIP_BUFS];
+
+void video_player_reclaim_buffers(void)
+{
+    for (int i = 0; i < VP_STRIP_BUFS; i++)
+    {
+        if (s_strip_buf[i] && s_strip_release_after[i] != 0 &&
+            refresh_done_count >= s_strip_release_after[i])
+        {
+            heap_caps_free(s_strip_buf[i]);
+            s_strip_buf[i] = NULL;
+            s_strip_release_after[i] = 0;
+            ESP_LOGI(TAG, "Reclaimed delayed LCD strip buffer %d", i);
+        }
+    }
+}
 
 static esp_err_t sr_open(sr_t *sr, FIL *f, size_t sz)
 {
@@ -390,6 +406,7 @@ esp_err_t video_player_init(const char *filename)
 {
     if (!filename || !filename[0])
         return ESP_ERR_INVALID_ARG;
+    video_player_reclaim_buffers();
     if (g_vp.initialized)
         video_player_stop();
     memset(&g_vp, 0, sizeof(g_vp));
@@ -879,7 +896,20 @@ void video_player_stop(void)
     if (!lcd_idle)
         ESP_LOGW(TAG, "LCD DMA stop timeout; retaining persistent strip buffer");
     for (int i = 0; i < VP_STRIP_BUFS; i++)
+    {
+        if (lcd_idle)
+        {
+            heap_caps_free(s_strip_buf[i]);
+            s_strip_buf[i] = NULL;
+            s_strip_release_after[i] = 0;
+        }
+        else
+        {
+            s_strip_release_after[i] =
+                g_vp.lcd_done_base + g_vp.strip_submitted;
+        }
         g_vp.strip_buf[i] = NULL;
+    }
 
     g_vp.initialized = false;
     ESP_LOGI(TAG, "Stopped");
