@@ -616,7 +616,7 @@ static void i2c_test_thread(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1)); /* ~1kHz 持续 I2C 活动 */
     }
     ESP_LOGI(TAG, "I2CTEST stopped (%d reads)", count);
-    s_i2c_test_task = NULL;
+    __atomic_store_n(&s_i2c_test_task, NULL, __ATOMIC_RELEASE);
     vTaskDelete(NULL);
 }
 
@@ -625,6 +625,11 @@ void audio_i2c_test_start(void)
     if (s_i2c_test_run)
     {
         ESP_LOGI(TAG, "I2CTEST already running");
+        return;
+    }
+    if (__atomic_load_n(&s_i2c_test_task, __ATOMIC_ACQUIRE) != NULL)
+    {
+        ESP_LOGW(TAG, "I2CTEST previous task is still stopping");
         return;
     }
     if (ctrl_if == NULL)
@@ -647,6 +652,13 @@ void audio_i2c_test_stop(void)
     }
     s_i2c_test_run = false;
     ESP_LOGI(TAG, "I2CTEST stopping...");
+
+    /* 等待线程自行退出，避免 stop/start 连续操作产生两个测试任务。 */
+    for (int wait_ms = 0; wait_ms < 100 &&
+         __atomic_load_n(&s_i2c_test_task, __ATOMIC_ACQUIRE) != NULL; wait_ms++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+    if (__atomic_load_n(&s_i2c_test_task, __ATOMIC_ACQUIRE) != NULL)
+        ESP_LOGW(TAG, "I2CTEST task did not stop within 100 ms");
 }
 
 bool audio_i2c_test_is_running(void)
