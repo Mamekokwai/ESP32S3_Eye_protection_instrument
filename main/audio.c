@@ -638,8 +638,16 @@ void audio_i2c_test_start(void)
         return;
     }
     s_i2c_test_run = true;
-    xTaskCreatePinnedToCore(i2c_test_thread, "i2ctest", 3072,
-                            NULL, 1, &s_i2c_test_task, 0);
+    BaseType_t created = xTaskCreatePinnedToCore(
+        i2c_test_thread, "i2ctest", 3072, NULL, 1,
+        &s_i2c_test_task, 0);
+    if (created != pdPASS)
+    {
+        s_i2c_test_run = false;
+        s_i2c_test_task = NULL;
+        ESP_LOGE(TAG, "I2CTEST task creation failed");
+        return;
+    }
     ESP_LOGI(TAG, "I2CTEST started (1kHz read reg0x00)");
 }
 
