@@ -1088,10 +1088,12 @@ void app_uart_send_gbk(const char *msg)
 
 void app_uart_inject(const char *cmd)
 {
-    /* 注入指令到缓冲区, 下一个 tick 自动解析 */
-    size_t len = strlen(cmd);
-    if (len >= sizeof(g_line))
-        len = sizeof(g_line) - 1;
+    /* 注入指令也必须经过换行触发的同一解析路径，不能只写入缓冲区。 */
+    if (!cmd)
+        return;
+    size_t len = strnlen(cmd, sizeof(g_line) - 2);
     memcpy(g_line, cmd, len);
-    g_pos = len;
+    g_line[len] = '\0';
+    g_pos = (int)len;
+    feed_char('\n', g_line, &g_pos);
 }
