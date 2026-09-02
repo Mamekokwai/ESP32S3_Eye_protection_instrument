@@ -46,6 +46,9 @@
 #define UART_LINE_SIZE 544
 #define UART_ENCODED_LINE_SIZE (UART_LINE_SIZE * 2 + 32)
 #define UART_TX_PIN GPIO_NUM_43
+#define CA51_FORWARD_QUEUE_LEN 4
+#define CA51_FORWARD_PREFIX "CA51 "
+#define CA51_FORWARD_LINE_SIZE (UART_ENCODED_LINE_SIZE + 8)
 
 /* ---- 指令缓冲 ---- */
 static char g_line[UART_LINE_SIZE];
@@ -54,6 +57,20 @@ static char g_usb_line[UART_LINE_SIZE];
 static int g_usb_pos = 0;
 static bool s_usb_input_ready;
 static uint8_t s_sleep_backlight = 100;
+typedef struct
+{
+    char data[CA51_FORWARD_LINE_SIZE];
+    size_t length;
+    size_t offset;
+    uint16_t stalled_ticks;
+} ca51_forward_item_t;
+
+/* UART1 接收到的 CA51 命令通过有界队列异步转发到 USB JTAG。
+ * 主循环只入队/每 tick 发送一小块，避免 USB 写入阻塞 UART 和播放器。 */
+static ca51_forward_item_t s_ca51_forward_queue[CA51_FORWARD_QUEUE_LEN];
+static size_t s_ca51_forward_head;
+static size_t s_ca51_forward_tail;
+static size_t s_ca51_forward_count;
 typedef enum { CMD_SOURCE_UART1, CMD_SOURCE_USB, CMD_SOURCE_BOTH } cmd_source_t;
 static cmd_source_t s_cmd_source = CMD_SOURCE_BOTH;
 /* 异步媒体结果（IMG/VID 完成或失败）返回到最近一次启动该媒体的链路。 */
@@ -245,6 +262,74 @@ static size_t make_response_line(const char *message,
     return used;
 }
 
+static void ca51_forward_enqueue(const char *message)
+{
+    if (!message || !s_usb_input_ready)
+        return;
+
+    if (s_ca51_forward_count >= CA51_FORWARD_QUEUE_LEN)
+    {
+        ESP_LOGW(TAG, "CA51->JTAG forward queue full; message dropped");
+        return;
+    }
+
+    char encoded[UART_ENCODED_LINE_SIZE];
+    size_t encoded_length = make_response_line(
+        message, s_uart1_encoding, s_usb_encoding,
+        encoded, sizeof(encoded));
+    size_t prefix_length = sizeof(CA51_FORWARD_PREFIX) - 1;
+    if (encoded_length == 0 ||
+        prefix_length + encoded_length > CA51_FORWARD_LINE_SIZE)
+    {
+        ESP_LOGW(TAG, "CA51->JTAG message too long; message dropped");
+        return;
+    }
+
+    ca51_forward_item_t *item = &s_ca51_forward_queue[s_ca51_forward_tail];
+    memcpy(item->data, CA51_FORWARD_PREFIX, prefix_length);
+    memcpy(item->data + prefix_length, encoded, encoded_length);
+    item->length = prefix_length + encoded_length;
+    item->offset = 0;
+    item->stalled_ticks = 0;
+
+    s_ca51_forward_tail =
+        (s_ca51_forward_tail + 1) % CA51_FORWARD_QUEUE_LEN;
+    s_ca51_forward_count++;
+}
+
+static void ca51_forward_flush(void)
+{
+    if (!s_usb_input_ready || s_ca51_forward_count == 0)
+        return;
+
+    ca51_forward_item_t *item = &s_ca51_forward_queue[s_ca51_forward_head];
+    size_t remaining = item->length - item->offset;
+    size_t chunk = remaining > 64 ? 64 : remaining;
+    int written = usb_serial_jtag_write_bytes(
+        (const uint8_t *)item->data + item->offset, chunk, 0);
+    if (written <= 0)
+    {
+        /* 非阻塞发送：USB TX 缓冲暂满时留到下一次 tick，超过约 1 秒丢弃。 */
+        if (++item->stalled_ticks >= 200)
+        {
+            ESP_LOGW(TAG, "CA51->JTAG forward timeout; message dropped");
+            s_ca51_forward_head =
+                (s_ca51_forward_head + 1) % CA51_FORWARD_QUEUE_LEN;
+            s_ca51_forward_count--;
+        }
+        return;
+    }
+
+    item->offset += (size_t)written;
+    item->stalled_ticks = 0;
+    if (item->offset >= item->length)
+    {
+        s_ca51_forward_head =
+            (s_ca51_forward_head + 1) % CA51_FORWARD_QUEUE_LEN;
+        s_ca51_forward_count--;
+    }
+}
+
 static void usb_write_all(const char *data, size_t length)
 {
     size_t sent = 0;
@@ -325,6 +410,14 @@ static void stop_display_video(void)
 
 static void cmd_handle(const char *cmd)
 {
+	/* CA51 UART0 调试行会同步转发到 UART1。只写入 ESP 日志，
+	 * 不作为业务命令处理，也不向 CA51 回传响应。 */
+	if (strncmp(cmd, "DBG ", 4) == 0)
+	{
+		ESP_LOGI("ca51", "%s", cmd);
+		return;
+	}
+
     ESP_LOGI(TAG, "%s CMD: [%s]",
              s_cmd_source == CMD_SOURCE_UART1 ? "UART1" : "JTAG", cmd);
 
@@ -965,6 +1058,8 @@ static void feed_char(char ch, char *line, int *pos)
             if (*pos > 0) {
                 cmd_source_t previous = s_cmd_source;
                 s_cmd_source = (line == g_usb_line) ? CMD_SOURCE_USB : CMD_SOURCE_UART1;
+                if (s_cmd_source == CMD_SOURCE_UART1)
+                    ca51_forward_enqueue(line);
                 cmd_handle(line);
                 s_cmd_source = previous;
             }
@@ -1074,6 +1169,9 @@ void app_uart_tick(void)
         while (usb_serial_jtag_read_bytes(&uch, 1, 0) > 0)
             feed_char((char)uch, g_usb_line, &g_usb_pos);
     }
+
+    /* 每次只发送一个小块，保证 CA51 转发不会阻塞主任务分片循环。 */
+    ca51_forward_flush();
 }
 
 void app_uart_send(const char *msg)
