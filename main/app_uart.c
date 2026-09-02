@@ -56,6 +56,8 @@ static bool s_usb_input_ready;
 static uint8_t s_sleep_backlight = 100;
 typedef enum { CMD_SOURCE_UART1, CMD_SOURCE_USB, CMD_SOURCE_BOTH } cmd_source_t;
 static cmd_source_t s_cmd_source = CMD_SOURCE_BOTH;
+/* 异步媒体结果（IMG/VID 完成或失败）返回到最近一次启动该媒体的链路。 */
+static cmd_source_t s_async_source = CMD_SOURCE_USB;
 
 typedef enum
 {
@@ -76,7 +78,10 @@ static const char *encoding_name(uart_encoding_t encoding)
 
 static uart_encoding_t *current_output_encoding(void)
 {
-    if (s_cmd_source == CMD_SOURCE_UART1)
+    cmd_source_t source = s_cmd_source == CMD_SOURCE_BOTH
+                              ? s_async_source
+                              : s_cmd_source;
+    if (source == CMD_SOURCE_UART1)
         return &s_uart1_encoding;
     return &s_usb_encoding;
 }
@@ -261,20 +266,28 @@ static void usb_write_all(const char *data, size_t length)
 
 static void uart_send_encoded(const char *msg, uart_encoding_t source_encoding)
 {
-    uart_encoding_t output_encoding = *current_output_encoding();
+    cmd_source_t output_source = s_cmd_source == CMD_SOURCE_BOTH
+                                     ? s_async_source
+                                     : s_cmd_source;
+    uart_encoding_t output_encoding = output_source == CMD_SOURCE_UART1
+                                          ? s_uart1_encoding
+                                          : s_usb_encoding;
     char line[UART_ENCODED_LINE_SIZE];
     size_t length = make_response_line(msg, source_encoding, output_encoding,
                                        line, sizeof(line));
     if (length == 0)
         return;
-    if (s_cmd_source == CMD_SOURCE_UART1)
+    if (output_source == CMD_SOURCE_UART1)
         uart_write_bytes(UART_PORT, line, length); /* UART1 TX=GPIO43 -> CA51 RX */
-    else if (s_cmd_source == CMD_SOURCE_BOTH)
-        printf("%s", line);
-    if (s_cmd_source == CMD_SOURCE_USB && s_usb_input_ready)
+    else if (output_source == CMD_SOURCE_USB && s_usb_input_ready)
     {
         usb_write_all("JTAG ", 5);
         usb_write_all(line, length);
+    }
+    else
+    {
+        /* USB 驱动不可用时保留日志输出，避免丢失调试信息。 */
+        printf("%s", line);
     }
 }
 
@@ -312,7 +325,8 @@ static void stop_display_video(void)
 
 static void cmd_handle(const char *cmd)
 {
-    ESP_LOGI(TAG, "CMD: [%s]", cmd);
+    ESP_LOGI(TAG, "%s CMD: [%s]",
+             s_cmd_source == CMD_SOURCE_UART1 ? "UART1" : "JTAG", cmd);
 
     /* === 当前链路的响应文本编码 === */
     if (strcasecmp(cmd, "ENC") == 0 || strcasecmp(cmd, "ENC?") == 0)
@@ -387,6 +401,7 @@ static void cmd_handle(const char *cmd)
         esp_err_t ret = flash_player_start(selection);
         if (ret == ESP_OK)
         {
+            s_async_source = s_cmd_source;
             g_display_mode = DISPLAY_VIDEO_PLAYING;
             spilcd_show_string(0, 0, 320, 16, 16,
                                "Video playing", BLACK);
@@ -493,6 +508,7 @@ static void cmd_handle(const char *cmd)
         esp_err_t ret = video_player_start(arg);
         if (ret == ESP_OK)
         {
+            s_async_source = s_cmd_source;
             g_display_mode = DISPLAY_SD_VIDEO_PLAYING;
             char response[UART_LINE_SIZE];
             snprintf(response, sizeof(response), "OK VID %s",
@@ -592,6 +608,7 @@ static void cmd_handle(const char *cmd)
         esp_err_t ret = image_viewer_start_flash(arg);
         if (ret == ESP_OK)
         {
+            s_async_source = s_cmd_source;
             g_display_mode = DISPLAY_IMAGE_LOADING;
             uart_send_str("OK FIMG loading");
         }
@@ -643,6 +660,7 @@ static void cmd_handle(const char *cmd)
         esp_err_t ret = image_viewer_start(arg);
         if (ret == ESP_OK)
         {
+            s_async_source = s_cmd_source;
             g_display_mode = DISPLAY_IMAGE_LOADING;
             uart_send_str("OK IMG loading");
         }
