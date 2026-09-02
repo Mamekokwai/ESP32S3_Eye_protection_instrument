@@ -16,8 +16,8 @@ extern display_mode_t g_display_mode;
 /**
  * @brief  UART 指令系统 (CA51F352P4 → ESP32)
  *
- * UART1: 仅 RX=IO44, 115200-8N1, 文本协议 (\n 终止)
- * 响应和日志由 UART0 TX=IO43 输出；IO38 是 LCD D/C，不能作 UART1 TX。
+ * UART1: RX=IO44、TX=IO43, 115200-8N1, 文本协议 (\n 终止)
+ * CA51 的 DBG 行转发到 USB JTAG 后不进入业务解析；IO38 是 LCD D/C。
  */
 
 void app_uart_init(void);

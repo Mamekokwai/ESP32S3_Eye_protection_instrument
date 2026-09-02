@@ -410,13 +410,11 @@ static void stop_display_video(void)
 
 static void cmd_handle(const char *cmd)
 {
-	/* CA51 UART0 调试行会同步转发到 UART1。只写入 ESP 日志，
-	 * 不作为业务命令处理，也不向 CA51 回传响应。 */
-	if (strncmp(cmd, "DBG ", 4) == 0)
-	{
-		ESP_LOGI("ca51", "%s", cmd);
-		return;
-	}
+
+    /* feed_char() 已将 CA51 UART0 调试行转发到 USB JTAG。
+     * 此处只终止业务解析，不向 CA51 回传 ERR unknown。 */
+    if (strncmp(cmd, "DBG ", 4) == 0)
+        return;
 
     ESP_LOGI(TAG, "%s CMD: [%s]",
              s_cmd_source == CMD_SOURCE_UART1 ? "UART1" : "JTAG", cmd);

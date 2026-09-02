@@ -11,7 +11,7 @@
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
 - 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
 - UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
-- 调试转发：UART1 收到的 CA51 完整命令会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG，仅用于观察，不会在 JTAG 侧重复执行。
+- 调试转发：UART1 收到的 CA51 完整行会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG；`DBG ` 行只转发、不进入业务解析，也不会向 CA51 返回 `ERR unknown`。
 - 启动显示：无 TF 卡时提示“请插入SD卡”；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
 - 生产安全：代码支持一次性 **通用** SD 授权令牌（P-256 签名验证 + `EYECARE_UNLOCKED` eFuse）及 Secure Boot V2/Release Flash Encryption；当前开发与生产增量配置均暂时关闭，待量产流程确认后再启用。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 

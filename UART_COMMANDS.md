@@ -4,7 +4,13 @@
 
 USB Serial-JTAG 返回的协议响应统一带有 `JTAG` 前缀（例如 `JTAG OK VID 1.avi`）；UART1 返回给 CA51 的响应不带此前缀。系统日志仍保持原有 `I/W/E` 格式。
 
-UART1 收到的每条完整命令会异步转发到 USB Serial-JTAG，格式为 `CA51 <命令>`，并以 `\r\n` 结束。该转发用于电脑调试观察 CA51 实际下发的内容，不会再次执行命令，也不会改变原命令返回到 UART1 的响应路径。转发使用有界缓冲和非阻塞发送；USB 未连接或发送缓冲持续不可用时，消息可能被丢弃并记录警告。
+UART1 收到的每条完整文本行会异步转发到 USB Serial-JTAG，格式为 `CA51 <原始行>`，并以 `\r\n` 结束。该转发用于电脑调试观察 CA51 实际下发的内容，不会在 JTAG 侧再次执行，也不会改变业务命令返回到 UART1 的响应路径。以 `DBG ` 开头的 CA51 调试行只转发、不进入业务命令解析，并且不会返回 `ERR unknown`。转发使用有界缓冲和非阻塞发送；USB 未连接或发送缓冲持续不可用时，消息可能被丢弃并记录警告。
+
+CA51 调试转发示例：
+
+```text
+CA51 DBG fw=1.0.3 t=3425ms key=KEY_POWER edge=FALL state=PRESS
+```
 
 本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。同步响应及媒体异步完成/失败响应均返回到发起指令的原通道，每条响应以 `\r\n` 结束。
 
@@ -15,9 +21,9 @@ UART1 收到的每条完整命令会异步转发到 USB Serial-JTAG，格式为 
 | 电气电平 | 3.3 V TTL UART，空闲状态为高电平；不是 RS-232 电平 |
 | 串口格式 | 115200 bit/s、8 数据位、无校验、1 停止位、无流控 |
 | ESP32 指令输入 | GPIO44，UART1 RX |
-| ESP32 响应/日志输出 | GPIO43，UART0 TX |
+| ESP32 响应输出 | GPIO43，UART1 TX |
 | 原生 USB | GPIO19 D-、GPIO20 D+，Linux `/dev/ttyACM*` |
-| 数据方向 | UART1/USB → ESP32；响应输出到 UART0/USB |
+| 数据方向 | UART1/USB → ESP32；响应输出到 UART1/USB |
 
 GPIO19/20 原生 USB Serial/JTAG 在 Linux 上通常为 `/dev/ttyACM0`，可用于烧录、日志监控和输入 `VPLAY`、`BL` 等业务指令。UART1 与 USB 使用独立命令缓冲，可同时接收。
 
