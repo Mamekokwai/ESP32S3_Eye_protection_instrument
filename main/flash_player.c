@@ -189,6 +189,10 @@ typedef struct
 } fp_ctx_t;
 
 static fp_ctx_t g_fp = {0};
+/* LCD DMA 未完成时不能释放条带缓冲。跨播放实例保留指针，避免
+ * flash_player_start() 清空上下文后造成不可回收的内存泄漏。 */
+static uint16_t *s_strip_buf[FP_STRIP_BUFS];
+static uint32_t s_strip_release_after[FP_STRIP_BUFS];
 
 /* ====== 公开 API ====== */
 
@@ -265,15 +269,29 @@ esp_err_t flash_player_start(const char *selection)
     }
     for (int i = 0; i < FP_STRIP_BUFS; i++)
     {
-        g_fp.strip_buf[i] = heap_caps_aligned_alloc(
-            64, FP_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (s_strip_buf[i] &&
+            s_strip_release_after[i] != 0 &&
+            refresh_done_count < s_strip_release_after[i])
+        {
+            ESP_LOGW(TAG, "LCD strip buffer %d is still busy", i);
+            ret = ESP_ERR_INVALID_STATE;
+            break;
+        }
+        s_strip_release_after[i] = 0;
+        if (!s_strip_buf[i])
+            s_strip_buf[i] = heap_caps_aligned_alloc(
+                64, FP_STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        g_fp.strip_buf[i] = s_strip_buf[i];
         if (!g_fp.strip_buf[i])
             break;
         g_fp.strip_buf_count++;
     }
+    if (ret != ESP_OK)
+        goto fail;
     if (g_fp.strip_buf_count == 0)
     {
-        ret = ESP_ERR_NO_MEM;
+        if (ret == ESP_OK)
+            ret = ESP_ERR_NO_MEM;
         goto fail;
     }
     if (g_fp.strip_buf_count < FP_STRIP_BUFS)
@@ -623,9 +641,20 @@ void flash_player_stop(void)
     }
     for (int i = 0; i < FP_STRIP_BUFS; i++)
     {
-        if (g_fp.strip_buf[i] && lcd_idle)
+        if (!g_fp.strip_buf[i])
+            continue;
+        if (lcd_idle)
         {
             heap_caps_free(g_fp.strip_buf[i]);
+            s_strip_buf[i] = NULL;
+            s_strip_release_after[i] = 0;
+            g_fp.strip_buf[i] = NULL;
+        }
+        else
+        {
+            s_strip_buf[i] = g_fp.strip_buf[i];
+            s_strip_release_after[i] =
+                g_fp.lcd_done_base + g_fp.strip_submitted;
             g_fp.strip_buf[i] = NULL;
         }
     }
