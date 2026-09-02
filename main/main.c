@@ -257,10 +257,35 @@ void app_main(void)
 
     /* 主循环 */
     static uint8_t ws = WS_NUM - 1;
+    bool low_power_sleep = false;
     ESP_LOGI(TAG, "loop start");
 
     while (1)
     {
+        if (g_display_mode == DISPLAY_SLEEP)
+        {
+            if (!low_power_sleep)
+            {
+                esp_timer_stop(tick_timer);
+                while (xSemaphoreTake(s_tick_sem, 0) == pdTRUE)
+                    ;
+                low_power_sleep = true;
+                ESP_LOGI(TAG, "Sleep mode: UART/JTAG command polling only");
+            }
+
+            /* USB/UART 驱动继续接收，主任务以较低频率轮询以降低唤醒次数。 */
+            vTaskDelay(pdMS_TO_TICKS(20));
+            app_uart_tick();
+            continue;
+        }
+
+        if (low_power_sleep)
+        {
+            ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, 1000));
+            low_power_sleep = false;
+            ESP_LOGI(TAG, "Wake mode: workspace scheduler resumed");
+        }
+
         xSemaphoreTake(s_tick_sem, portMAX_DELAY); /* 阻塞等 1ms tick, 让出 CPU 给 idle */
         video_player_reclaim_buffers();
         flash_player_reclaim_buffers();

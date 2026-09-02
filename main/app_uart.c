@@ -417,6 +417,26 @@ static void stop_display_video(void)
         video_player_stop();
 }
 
+static bool sleep_command_allowed(const char *cmd)
+{
+    return strcasecmp(cmd, "WAKE") == 0 ||
+           strcasecmp(cmd, "SLEEP") == 0 ||
+           strcasecmp(cmd, "STATUS") == 0 ||
+           strcasecmp(cmd, "INFO") == 0 ||
+           strcasecmp(cmd, "ENC") == 0 ||
+           strcasecmp(cmd, "ENC?") == 0 ||
+           strcasecmp(cmd, "ENC UTF8") == 0 ||
+           strcasecmp(cmd, "ENC UTF-8") == 0 ||
+           strcasecmp(cmd, "ENC GBK") == 0 ||
+           strcasecmp(cmd, "BL") == 0 ||
+           strcasecmp(cmd, "BL?") == 0 ||
+           strncasecmp(cmd, "BL ", 3) == 0 ||
+           strcasecmp(cmd, "CA51FWD") == 0 ||
+           strcasecmp(cmd, "CA51FWD?") == 0 ||
+           strncasecmp(cmd, "CA51FWD ", 8) == 0 ||
+           strcasecmp(cmd, "RST") == 0;
+}
+
 static void cmd_handle(const char *cmd)
 {
 
@@ -464,6 +484,12 @@ static void cmd_handle(const char *cmd)
      * 此处只终止业务解析，不向 CA51 回传 ERR unknown。 */
     if (strncmp(cmd, "DBG ", 4) == 0)
         return;
+
+    if (g_display_mode == DISPLAY_SLEEP && !sleep_command_allowed(cmd))
+    {
+        uart_send_str("ERR SLEEP");
+        return;
+    }
 
     ESP_LOGI(TAG, "%s CMD: [%s]",
              s_cmd_source == CMD_SOURCE_UART1 ? "UART1" : "JTAG", cmd);
@@ -916,7 +942,10 @@ static void cmd_handle(const char *cmd)
     if (strcasecmp(cmd, "BL") == 0 || strcasecmp(cmd, "BL?") == 0)
     {
         char response[32];
-        snprintf(response, sizeof(response), "OK BL %u", spilcd_backlight_get());
+        uint8_t brightness = g_display_mode == DISPLAY_SLEEP
+                                 ? s_sleep_backlight
+                                 : spilcd_backlight_get();
+        snprintf(response, sizeof(response), "OK BL %u", brightness);
         uart_send_str(response);
         return;
     }
@@ -936,7 +965,10 @@ static void cmd_handle(const char *cmd)
             uart_send_str("ERR BL range 0-100");
             return;
         }
-        spilcd_backlight_set((uint8_t)value);
+        if (g_display_mode == DISPLAY_SLEEP)
+            s_sleep_backlight = (uint8_t)value;
+        else
+            spilcd_backlight_set((uint8_t)value);
         char response[32];
         snprintf(response, sizeof(response), "OK BL %ld", value);
         uart_send_str(response);

@@ -274,15 +274,16 @@ static void audio_service_task(void *arg)
     (void)arg;
     while (1)
     {
+        bool active = false;
         audio_lock();
-        if (g_ap.initialized &&
-            audio_player_tick_locked() == PLAYER_ERROR)
+        active = g_ap.initialized;
+        if (active && audio_player_tick_locked() == PLAYER_ERROR)
         {
             ESP_LOGE(TAG, "Audio service playback error");
             audio_player_stop_locked();
         }
         audio_unlock();
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(pdMS_TO_TICKS(active ? 5 : 50));
     }
 }
 
