@@ -7,8 +7,12 @@
 #include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "sd_card"
+#define SD_CARD_MOUNT_RETRIES 3
+#define SD_CARD_RETRY_DELAY_MS 100
 
 static sdmmc_card_t *s_card;
 static esp_err_t s_mount_result = ESP_ERR_INVALID_STATE;
@@ -88,8 +92,18 @@ esp_err_t sd_card_mount(void)
     };
     ESP_LOGI(TAG, "Protocol: SPI, target freq: %d kHz",
              host.max_freq_khz);
-    s_mount_result = esp_vfs_fat_sdspi_mount(
-        SD_CARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_card);
+    for (int attempt = 1; attempt <= SD_CARD_MOUNT_RETRIES; attempt++)
+    {
+        s_mount_result = esp_vfs_fat_sdspi_mount(
+            SD_CARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_card);
+        if (s_mount_result == ESP_OK)
+            break;
+        ESP_LOGW(TAG, "SPI mount attempt %d/%d failed: %s", attempt,
+                 SD_CARD_MOUNT_RETRIES, esp_err_to_name(s_mount_result));
+        s_card = NULL;
+        if (attempt < SD_CARD_MOUNT_RETRIES)
+            vTaskDelay(pdMS_TO_TICKS(SD_CARD_RETRY_DELAY_MS));
+    }
 
 #elif SD_CARD_PROTOCOL == SD_CARD_PROTOCOL_SDMMC_1BIT
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
@@ -110,8 +124,18 @@ esp_err_t sd_card_mount(void)
 
     ESP_LOGI(TAG, "Protocol: SDMMC 1-bit, target freq: %d kHz",
              host.max_freq_khz);
-    s_mount_result = esp_vfs_fat_sdmmc_mount(
-        SD_CARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_card);
+    for (int attempt = 1; attempt <= SD_CARD_MOUNT_RETRIES; attempt++)
+    {
+        s_mount_result = esp_vfs_fat_sdmmc_mount(
+            SD_CARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_card);
+        if (s_mount_result == ESP_OK)
+            break;
+        ESP_LOGW(TAG, "SDMMC mount attempt %d/%d failed: %s", attempt,
+                 SD_CARD_MOUNT_RETRIES, esp_err_to_name(s_mount_result));
+        s_card = NULL;
+        if (attempt < SD_CARD_MOUNT_RETRIES)
+            vTaskDelay(pdMS_TO_TICKS(SD_CARD_RETRY_DELAY_MS));
+    }
 
 #else
 #error "Unsupported SD_CARD_PROTOCOL"

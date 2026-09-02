@@ -160,6 +160,9 @@ static void monitor_tick(void)
  * 提示用内嵌 GBK 字库 (无卡也显示): gbk_embedded_font.h */
 static void boot_gate(void)
 {
+    /* TF 卡座没有 CD 检测脚；上电后先留出卡电源和内部复位稳定时间，
+     * 再执行首次枚举，避免“开机插卡失败、热插拔后成功”的时序差异。 */
+    vTaskDelay(pdMS_TO_TICKS(300));
     while (1)
     {
         /* 1. 检查 SD 卡 */
