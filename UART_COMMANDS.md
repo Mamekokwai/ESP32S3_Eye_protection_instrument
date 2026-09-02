@@ -12,6 +12,16 @@ CA51 调试转发示例：
 CA51 DBG fw=1.0.3 t=3425ms key=KEY_POWER edge=FALL state=PRESS
 ```
 
+JTAG 可控制 CA51 消息转发：
+
+| JTAG 指令 | 说明 | 响应 |
+| --- | --- | --- |
+| `CA51FWD ON` | 开启 UART1 消息转发（默认开启） | `JTAG OK CA51FWD ON` |
+| `CA51FWD OFF` | 关闭转发并清空待发送队列 | `JTAG OK CA51FWD OFF` |
+| `CA51FWD` 或 `CA51FWD?` | 查询当前开关状态 | `JTAG OK CA51FWD ON/OFF` |
+
+上述配置指令仅接受 JTAG 输入；从 UART1 发送时返回 `ERR CA51FWD JTAG ONLY`，不会改变开关状态。开关只在当前运行期间有效，复位后恢复默认开启。
+
 本固件同时通过 UART1 和原生 USB Serial/JTAG 接收指令。指令为 ASCII 文本，大小写不敏感，以 `\n` 或 `\r\n` 结束；参数之间使用空格分隔。同步响应及媒体异步完成/失败响应均返回到发起指令的原通道，每条响应以 `\r\n` 结束。
 
 ## 通信参数

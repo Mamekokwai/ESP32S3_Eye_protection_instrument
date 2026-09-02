@@ -57,6 +57,8 @@ static char g_usb_line[UART_LINE_SIZE];
 static int g_usb_pos = 0;
 static bool s_usb_input_ready;
 static uint8_t s_sleep_backlight = 100;
+/* CA51->JTAG 转发默认开启；通过 JTAG 的 CA51FWD ON/OFF 临时切换。 */
+static bool s_ca51_forward_enabled = true;
 typedef struct
 {
     char data[CA51_FORWARD_LINE_SIZE];
@@ -264,7 +266,7 @@ static size_t make_response_line(const char *message,
 
 static void ca51_forward_enqueue(const char *message)
 {
-    if (!message || !s_usb_input_ready)
+    if (!message || !s_usb_input_ready || !s_ca51_forward_enabled)
         return;
 
     if (s_ca51_forward_count >= CA51_FORWARD_QUEUE_LEN)
@@ -295,6 +297,13 @@ static void ca51_forward_enqueue(const char *message)
     s_ca51_forward_tail =
         (s_ca51_forward_tail + 1) % CA51_FORWARD_QUEUE_LEN;
     s_ca51_forward_count++;
+}
+
+static void ca51_forward_clear_queue(void)
+{
+    s_ca51_forward_head = 0;
+    s_ca51_forward_tail = 0;
+    s_ca51_forward_count = 0;
 }
 
 static void ca51_forward_flush(void)
@@ -410,6 +419,46 @@ static void stop_display_video(void)
 
 static void cmd_handle(const char *cmd)
 {
+
+    /* CA51->JTAG 转发开关只允许电脑 JTAG 配置，避免 CA51 改变调试链路。 */
+    if (strcasecmp(cmd, "CA51FWD") == 0 ||
+        strcasecmp(cmd, "CA51FWD?") == 0)
+    {
+        if (s_cmd_source != CMD_SOURCE_USB)
+        {
+            uart_send_str("ERR CA51FWD JTAG ONLY");
+            return;
+        }
+        uart_send_str(s_ca51_forward_enabled
+                          ? "OK CA51FWD ON"
+                          : "OK CA51FWD OFF");
+        return;
+    }
+    if (strncasecmp(cmd, "CA51FWD ", 8) == 0)
+    {
+        if (s_cmd_source != CMD_SOURCE_USB)
+        {
+            uart_send_str("ERR CA51FWD JTAG ONLY");
+            return;
+        }
+        const char *mode = cmd + 8;
+        if (strcasecmp(mode, "ON") == 0)
+        {
+            s_ca51_forward_enabled = true;
+            uart_send_str("OK CA51FWD ON");
+        }
+        else if (strcasecmp(mode, "OFF") == 0)
+        {
+            s_ca51_forward_enabled = false;
+            ca51_forward_clear_queue();
+            uart_send_str("OK CA51FWD OFF");
+        }
+        else
+        {
+            uart_send_str("ERR usage: CA51FWD ON|OFF");
+        }
+        return;
+    }
 
     /* feed_char() 已将 CA51 UART0 调试行转发到 USB JTAG。
      * 此处只终止业务解析，不向 CA51 回传 ERR unknown。 */

@@ -12,7 +12,7 @@
 | 背光 | V1.4：GPIO1=PWM_LED，LEDC PWM（1 kHz/8bit）→ Q3 → LEDK；默认 100%，`spilcd_backlight_set()` 调光 | `components/BSP/SPILCD/spilcd.c` |
 | TF 卡 | 首选 SDMMC 1-bit 40 MHz：CLK=21、CMD=47、D0=14；SPI fallback 最高 20 MHz | `components/BSP/SD_CARD/` |
 | 音频 | ES8311；I2C 4/5，I2S MCLK45/BCLK39/WS41/DOUT42，功放 GPIO2 高有效 | `main/audio.c` |
-| UART | UART1（RX GPIO44/TX GPIO43）及原生 USB Serial-JTAG 独立双向通信；响应返回来源链路；UART1 默认 GBK、USB 默认 UTF-8，可用 `ENC`/`ENC?` 独立配置和查询；UART1 完整行异步转发到 JTAG（`CA51 ` 前缀），`DBG ` 调试行不执行且不响应；支持背光控制 | `main/app_uart.c` |
+| UART | UART1（RX GPIO44/TX GPIO43）及原生 USB Serial-JTAG 独立双向通信；响应返回来源链路；UART1 默认 GBK、USB 默认 UTF-8，可用 `ENC`/`ENC?` 独立配置和查询；UART1 完整行异步转发到 JTAG（`CA51 ` 前缀），`DBG ` 调试行不执行且不响应；JTAG 可用 `CA51FWD ON|OFF` 开关并用 `CA51FWD?` 查询；支持背光控制 | `main/app_uart.c` |
 
 GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用。任何声称“TF 当前为 SPI 20 MHz”或“UART TX 为 GPIO38”的说明均不适用于当前版本。
 
@@ -20,7 +20,7 @@ GPIO0 在当前 SDMMC 1-bit 正常传输中不用；GPIO38 已被 LCD D/C 占用
 ## 软件与媒体
 
 UART 业务链路已调整为 UART1（CA51，RX GPIO44/TX GPIO43）和 USB Serial-JTAG（电脑）双通道独立收发；UART0 不参与业务通信。媒体路径在固件内部保持 GBK，协议响应按来源链路独立编码：UART1 默认 GBK、USB 默认 UTF-8，可用 `ENC UTF8|GBK` 设置当前链路并用 `ENC?` 查询，重启后恢复默认值。
-UART1 收到的完整文本行会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG，仅供调试观察，不会在 JTAG 侧重复执行；其中 CA51 固件发来的 `DBG ` 行在转发后立即结束解析，不返回 `ERR unknown`。转发采用有界队列和非阻塞发送，USB 不可用或队列超限时允许丢弃并记录警告。
+UART1 收到的完整文本行会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG，仅供调试观察，不会在 JTAG 侧重复执行；其中 CA51 固件发来的 `DBG ` 行在转发后立即结束解析，不返回 `ERR unknown`。JTAG 可用 `CA51FWD ON|OFF` 控制转发、用 `CA51FWD?` 查询，配置仅在当前运行期间有效，复位后默认开启。转发采用有界队列和非阻塞发送，USB 不可用或队列超限时允许丢弃并记录警告。
 
 SD 视频播放器的 LCD DMA 条带缓冲在播放器生命周期内持久复用，连续执行 `VID 1`、`VID 2` 等切换不会重复申请内部 DMA 内存。
 
