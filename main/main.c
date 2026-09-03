@@ -125,6 +125,16 @@ static void display_tick(void)
         }
         else if (image_state == IMAGE_VIEWER_ERROR)
         {
+            /* SD 卡在 IMG 读取期间被拔出时，统一切换到 Flash 提示图；
+             * 普通 JPEG 格式/尺寸错误仍保留原有错误回显。 */
+            bool sd_image_error =
+                strcmp(image_viewer_command(), "IMG") == 0 &&
+                (!sd_card_is_mounted() || sd_card_probe() != ESP_OK);
+            if (sd_image_error && app_uart_start_sd_error_image())
+            {
+                app_uart_send("OK FIMG loading");
+                break;
+            }
             char response[64];
             snprintf(response, sizeof(response), "ERR %s %s",
                      image_viewer_command(),

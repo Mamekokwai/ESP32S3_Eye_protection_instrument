@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 typedef enum
 {
     DISPLAY_IDLE = 0,
@@ -25,3 +27,6 @@ void app_uart_tick(void);       /* 每 5ms: 接收 + 解析指令 */
 void app_uart_send(const char *msg);  /* 发送响应 */
 void app_uart_send_gbk(const char *msg); /* 发送含FATFS GBK路径的响应 */
 void app_uart_inject(const char *cmd); /* 注入指令, 模拟 CA51 发送 */
+
+/* SD 卡异常时切换到 Flash 中的 SDCard.jpg；返回是否已开始异步显示。 */
+bool app_uart_start_sd_error_image(void);

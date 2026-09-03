@@ -34,6 +34,7 @@
 #include "audio.h"
 #include "audio_player.h"
 #include "sd_browser.h"
+#include "sd_card.h"
 #include "image_viewer.h"
 
 #define TAG "uart"
@@ -87,6 +88,11 @@ typedef enum
 /* CA51沿用移交协议的GBK；电脑终端默认使用UTF-8。 */
 static uart_encoding_t s_uart1_encoding = UART_ENCODING_GBK;
 static uart_encoding_t s_usb_encoding = UART_ENCODING_UTF8;
+
+static bool sd_card_unavailable(void)
+{
+    return !sd_card_is_mounted() || sd_card_probe() != ESP_OK;
+}
 
 /* ====== 内部 ====== */
 
@@ -823,6 +829,21 @@ static void cmd_handle(const char *cmd)
         if (g_display_mode == DISPLAY_IMAGE_LOADING)
             image_viewer_cancel();
         g_display_mode = DISPLAY_IDLE;
+
+        /* IMG 访问 TF 前先探测一次。无卡或拔卡后的短窗口内，不把
+         * INSERT CARD/READ FAILED 等字体错误画到 LCD，而是统一显示
+         * Flash 中的 SDCard.jpg。 */
+        if (sd_card_unavailable())
+        {
+            if (app_uart_start_sd_error_image())
+            {
+                uart_send_str("OK FIMG loading");
+                return;
+            }
+            uart_send_str("ERR IMG SD_FALLBACK");
+            return;
+        }
+
         esp_err_t ret = image_viewer_start(arg);
         if (ret == ESP_OK)
         {
@@ -832,6 +853,13 @@ static void cmd_handle(const char *cmd)
         }
         else
         {
+            /* 卡可能在目录扫描或打开文件的瞬间被拔出。再次确认后
+             * 仍按 SD 卡异常处理，避免显示普通 IMAGE ERROR。 */
+            if (sd_card_unavailable() && app_uart_start_sd_error_image())
+            {
+                uart_send_str("OK FIMG loading");
+                return;
+            }
             char response[64];
             snprintf(response, sizeof(response), "ERR IMG %s",
                      esp_err_to_name(ret));
@@ -1123,6 +1151,29 @@ static void cmd_handle(const char *cmd)
 }
 
 /* ====== 公开 API ====== */
+
+bool app_uart_start_sd_error_image(void)
+{
+    /* 在命令上下文中记录原始链路；异步完成/失败响应仍回到该链路。
+     * 主循环调用时 s_cmd_source 为 BOTH，因此保留原有 s_async_source。 */
+    if (s_cmd_source != CMD_SOURCE_BOTH)
+        s_async_source = s_cmd_source;
+
+    stop_display_video();
+    if (g_display_mode == DISPLAY_IMAGE_LOADING)
+        image_viewer_cancel();
+    g_display_mode = DISPLAY_IDLE;
+
+    esp_err_t ret = image_viewer_start_flash("SDCard.jpg");
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Cannot start SD fallback image: %s",
+                 esp_err_to_name(ret));
+        return false;
+    }
+    g_display_mode = DISPLAY_IMAGE_LOADING;
+    return true;
+}
 
 /* ---- 单字符指令解析 ---- */
 static void feed_char(char ch, char *line, int *pos)

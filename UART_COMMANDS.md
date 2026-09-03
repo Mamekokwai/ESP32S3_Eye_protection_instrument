@@ -149,7 +149,7 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | `IMG <N>` | 显示第 N 个 JPEG 文件 |
 | `IMG <filename.jpg>` | 按文件名显示 JPEG |
 
-`IMG` 开始时先返回 `OK IMG loading`，完成后返回 `OK IMG name widthxheight`。支持 Baseline JPEG，文件大小不超过 1 MiB，解码尺寸不超过 320×320；小图自动居中，Progressive JPEG 不支持。图片序号按 FAT 目录原始遍历顺序生成。
+`IMG` 开始时先返回 `OK IMG loading`，完成后返回 `OK IMG name widthxheight`。支持 Baseline JPEG，文件大小不超过 1 MiB，解码尺寸不超过 320×320；小图自动居中，Progressive JPEG 不支持。图片序号按 FAT 目录原始遍历顺序生成。若执行前或读取过程中检测到 SD 卡拔出/无响应，自动改为异步执行 `FIMG SDCard.jpg`，并返回 `OK FIMG loading`，避免显示 `IMAGE ERROR`。
 
 ## 音频指令
 
