@@ -10,6 +10,7 @@
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
 - 用户设置：音量和背光亮度保存到 NVS，重启后恢复；LCD 背光启动时先关闭，读取配置后延迟 1 s 开启。
 - 音量/背光支持 `VOL+`、`VOL-`（步进 1）及 `VOL++`、`VOL--`（步进 10），背光对应 `BL+`、`BL-`、`BL++`、`BL--`；两者均限制在 5~100，边界可通过独立宏调整。
+- `APLAY <N/filename>` 从指定音频开始按 `ALIST` 的递归索引顺序自动轮播；多首播完回到第一首，只有一首时循环该曲，`ASTOP` 会停止轮播。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
 - 中文显示：FATFS CODEPAGE_936（GBK）；无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库；SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
 - UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
@@ -96,7 +97,7 @@ GPIO0 不参与当前 SDMMC 1-bit 数据传输。GPIO38 是 LCD D/C，不是 UAR
 
 - TF 视频：`.avi`、MJPEG、最大 320×320；AVI 内音频块被跳过。
 - 图片：Baseline `.jpg/.jpeg`、最大 1 MiB、解码尺寸不超过 320×320；不支持 Progressive JPEG。
-- TF 音频：`.pcm` 或 `.mp3`；PCM 约定为 16-bit、单声道、16 kHz。
+- TF 音频：`.pcm` 或 `.mp3`；PCM 约定为 16-bit、单声道、16 kHz。`APLAY` 启动后自动轮播全部音频文件。
 - `VIDLIST`、`IMGLIST`、`ALIST` 会递归扫描子目录，序号按 FAT 遍历顺序生成；也可传相对路径。`SDLIST` 仍只在 LCD 上浏览根目录。
 
 ## 验证

@@ -10,8 +10,10 @@
 #include "mp3_decoder_wrapper.h"
 #include "ff.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <limits.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -57,7 +59,27 @@ static ap_ctx_t g_ap = { .volume = 70, .loop = true };
 static SemaphoreHandle_t g_audio_mutex;
 static TaskHandle_t g_audio_task;
 
+/* APLAY 启动后按媒体目录的递归索引顺序自动轮播。索引只在命令启动时
+ * 建立，播放过程中不保存整张目录，避免额外占用大量内存。 */
+static bool s_playlist_enabled;
+static int s_playlist_count;
+static int s_playlist_index;
+
 static void audio_player_stop_locked(void);
+
+static bool parse_audio_index(const char *selection, int *index)
+{
+    if (!selection || !selection[0] || !index)
+        return false;
+
+    char *end = NULL;
+    long value = strtol(selection, &end, 10);
+    if (selection == end || *end != '\0' || value < 1 || value > INT_MAX)
+        return false;
+
+    *index = (int)value;
+    return true;
+}
 
 static void audio_lock(void)
 {
@@ -140,6 +162,36 @@ static esp_err_t audio_player_init_locked(const char *filename)
     return ESP_OK;
 }
 
+/* 在音频服务任务持有互斥锁时切换到下一首，避免调用公开 API 再次加锁。 */
+static bool audio_player_open_next_locked(void)
+{
+    if (!s_playlist_enabled || s_playlist_count <= 0)
+        return false;
+
+    int next = s_playlist_index % s_playlist_count + 1;
+    for (int attempt = 0; attempt < s_playlist_count; attempt++) {
+        char name[MEDIA_CATALOG_PATH_MAX];
+        char selection[12];
+        snprintf(selection, sizeof(selection), "%d", next);
+        if (media_catalog_resolve(MEDIA_AUDIO, selection, name,
+                                   sizeof(name)) == ESP_OK) {
+            char path[MEDIA_CATALOG_PATH_MAX + 4];
+            int written = snprintf(path, sizeof(path), "0:/%s", name);
+            if (written > 0 && written < (int)sizeof(path) &&
+                audio_player_init_locked(path) == ESP_OK) {
+                s_playlist_index = next;
+                ESP_LOGI(TAG, "Playlist next: %s", name);
+                return true;
+            }
+        }
+        next = next % s_playlist_count + 1;
+    }
+
+    ESP_LOGW(TAG, "Playlist has no playable audio file");
+    s_playlist_enabled = false;
+    return false;
+}
+
 static player_ret_t audio_player_tick_locked(void)
 {
     if (!g_ap.initialized) return PLAYER_ERROR;
@@ -155,6 +207,8 @@ static player_ret_t audio_player_tick_locked(void)
                     return PLAYER_ERROR;
                 }
                 if (br == 0) {
+                    if (audio_player_open_next_locked())
+                        continue;
                     if (!g_ap.loop) {
                         audio_player_stop_locked();
                         return PLAYER_OK;
@@ -211,6 +265,8 @@ static player_ret_t audio_player_tick_locked(void)
 
     /* PCM: 检查是否播放完毕 */
     if (g_ap.pos >= g_ap.file_size) {
+        if (audio_player_open_next_locked())
+            return PLAYER_OK;
         if (g_ap.loop) {
             /* 循环: 回到开头 */
             f_lseek(&g_ap.file, 0);
@@ -316,6 +372,9 @@ esp_err_t audio_player_start_service(void)
 esp_err_t audio_player_init(const char *filename)
 {
     audio_lock();
+    s_playlist_enabled = false;
+    s_playlist_count = 0;
+    s_playlist_index = 0;
     esp_err_t ret = audio_player_init_locked(filename);
     audio_unlock();
     return ret;
@@ -329,11 +388,48 @@ esp_err_t audio_player_start(const char *selection)
     if (ret != ESP_OK)
         return ret;
 
+    char list_probe[1];
+    int playlist_count = media_catalog_list(MEDIA_AUDIO, list_probe,
+                                            sizeof(list_probe));
+    int playlist_index = 0;
+    if (playlist_count > 0) {
+        if (parse_audio_index(selection, &playlist_index)) {
+            if (playlist_index > playlist_count)
+                playlist_index = 0;
+        } else {
+            /* 路径形式也加入轮播：将其映射回递归目录索引。 */
+            for (int candidate = 1; candidate <= playlist_count; candidate++) {
+                char candidate_selection[12];
+                char candidate_name[MEDIA_CATALOG_PATH_MAX];
+                snprintf(candidate_selection, sizeof(candidate_selection),
+                         "%d", candidate);
+                if (media_catalog_resolve(MEDIA_AUDIO, candidate_selection,
+                                           candidate_name,
+                                           sizeof(candidate_name)) == ESP_OK &&
+                    strcmp(candidate_name, name) == 0) {
+                    playlist_index = candidate;
+                    break;
+                }
+            }
+        }
+    }
+
     char path[MEDIA_CATALOG_PATH_MAX + 4];
     int written = snprintf(path, sizeof(path), "0:/%s", name);
     if (written <= 0 || written >= (int)sizeof(path))
         return ESP_ERR_INVALID_SIZE;
-    return audio_player_init(path);
+    audio_lock();
+    s_playlist_enabled = false;
+    s_playlist_count = 0;
+    s_playlist_index = 0;
+    ret = audio_player_init_locked(path);
+    if (ret == ESP_OK && playlist_count > 0 && playlist_index > 0) {
+        s_playlist_enabled = true;
+        s_playlist_count = playlist_count;
+        s_playlist_index = playlist_index;
+    }
+    audio_unlock();
+    return ret;
 }
 
 player_ret_t audio_player_tick(void)
@@ -350,6 +446,9 @@ void audio_player_stop(void)
 {
     audio_lock();
     audio_player_stop_locked();
+    s_playlist_enabled = false;
+    s_playlist_count = 0;
+    s_playlist_index = 0;
     audio_unlock();
 }
 
