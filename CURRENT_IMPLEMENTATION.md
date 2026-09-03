@@ -32,7 +32,7 @@ SD 视频只使用 AVI `SecPerFrame` 做帧率控制，并以 LCD DMA 完成事�
 
 | 项目 | 当前实现 |
 |---|---|
-| 启动门 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：TF 卡座无 CD 检测脚，首次挂载前等待 300 ms，每次挂载最多重试 3 次（间隔 100 ms）；无 SD 卡时显示 Flash 中的 `SDCard.jpg`（不依赖字库）并重试；加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。TF 卡只挂载一次，避免使已打开的字库句柄失效；Flash 自动视频不可用时显示 `READY / NO FLASH VIDEO`，不再保持黑屏。 |
+| 启动门与热插拔 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：TF 卡座无 CD 检测脚，首次挂载前等待 300 ms，每次挂载最多重试 3 次（间隔 100 ms）；无 SD 卡时显示 Flash 中的 `SDCard.jpg`（不依赖字库）并重试。运行中每 2 s 用 CMD13 探测卡状态，拔卡时先停止 SD 视频/音频并卸载文件系统，重新插卡后自动重挂载；已挂载且在线时不会重复卸载挂载。加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。Flash 自动视频不可用时显示 `READY / NO FLASH VIDEO`，不再保持黑屏。 |
 | 中文字库 | ① 内嵌 `gbk_embedded_font.h`（解密提示等无卡后续流程），② TF 卡 `/SYSTEM/FONT/GBK16.FON`（完整 GBK16 字库，SDLIST 任意中文文件名）。无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库。FATFS 用 CODEPAGE_936 + ANSI/OEM，`d_name` 返回 GBK 双字节 |
 | 主循环 | 正常模式为 1 ms tick、5 个 cooperative workspace，视频每 1 ms 快速服务；`SLEEP` 时停止 tick，仅每 20 ms 轮询 UART1/JTAG 命令，`WAKE` 后恢复调度 |
 | Flash 视频 | AVI/MJPEG，mmap `storage`，兼容媒体索引 v1/v2，PSRAM 双帧，2×40 行内部 SRAM DMA 条带 |

@@ -45,7 +45,7 @@ static esp_err_t init_spi_bus(void)
 }
 #endif
 
-static esp_err_t unmount_if_needed(void)
+esp_err_t sd_card_unmount(void)
 {
     if (!sd_card_is_mounted())
         return ESP_OK;
@@ -59,11 +59,28 @@ static esp_err_t unmount_if_needed(void)
     return err;
 }
 
+esp_err_t sd_card_probe(void)
+{
+    if (!sd_card_is_mounted())
+        return ESP_ERR_INVALID_STATE;
+
+    /* 无 CD 引脚时通过 CMD13 查询卡状态，拔卡或总线异常会返回错误。 */
+    return sdmmc_get_status(s_card);
+}
+
 esp_err_t sd_card_mount(void)
 {
-    esp_err_t err = unmount_if_needed();
-    if (err != ESP_OK)
-        return err;
+    if (sd_card_is_mounted())
+    {
+        esp_err_t probe = sd_card_probe();
+        if (probe == ESP_OK)
+            return ESP_OK;
+
+        ESP_LOGW(TAG, "Mounted card is no longer responding: %s",
+                 esp_err_to_name(probe));
+        /* 卡可能已经拔出，卸载失败也要清除软件状态，允许后续重试。 */
+        sd_card_unmount();
+    }
 
     const esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,

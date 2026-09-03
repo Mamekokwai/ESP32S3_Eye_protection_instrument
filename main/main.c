@@ -147,10 +147,40 @@ static uint16_t g_mon = 0;
 static void monitor_tick(void)
 {
     g_mon++;
-    if (g_mon % 400 == 0) /* 2s   */
+    if (g_mon % 400 == 0) /* 2s */
+    {
+        /* TF 卡座没有 CD 脚：周期性用 CMD13 检查在线状态。先停掉
+         * 可能仍持有文件句柄的播放器，再卸载，避免拔卡后反复报错。 */
+        if (sd_card_is_mounted())
+        {
+            esp_err_t sd_ret = sd_card_probe();
+            if (sd_ret != ESP_OK)
+            {
+                ESP_LOGW(TAG, "SD card removed or unresponsive: %s",
+                         esp_err_to_name(sd_ret));
+                if (g_display_mode == DISPLAY_SD_VIDEO_PLAYING ||
+                    g_display_mode == DISPLAY_SD_VIDEO_PAUSED)
+                {
+                    video_player_stop();
+                    g_display_mode = DISPLAY_IDLE;
+                }
+                if (audio_player_is_active())
+                    audio_player_stop();
+                sd_card_unmount();
+            }
+        }
+        else
+        {
+            /* 检测到重新插卡后自动恢复挂载；播放器由下一条命令启动。 */
+            esp_err_t sd_ret = sd_card_mount();
+            if (sd_ret == ESP_OK)
+                ESP_LOGI(TAG, "SD card reinserted and mounted");
+        }
+
         ESP_LOGI(TAG, "heap=%lu display=%d audio=%d",
                  esp_get_free_heap_size(), g_display_mode,
                  audio_player_is_active());
+    }
 }
 
 /* ====== 启动门: SD 卡检测 + 解密检测 ======
