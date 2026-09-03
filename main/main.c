@@ -154,12 +154,44 @@ static void monitor_tick(void)
 }
 
 /* ====== 启动门: SD 卡检测 + 解密检测 ======
- * 链路: 检查SD卡 → 未插入则提示并重试
+ * 链路: 检查SD卡 → 未插入则显示 Flash 中的 SDCard.jpg 并重试
  *              → 已插入 → 检查解密 → 未解密则提示并重试
  *                                    → 已解密 → 进入正常启动
- * 提示用内嵌 GBK 字库 (无卡也显示): gbk_embedded_font.h */
+ * 无卡提示图不依赖 TF 卡字库。 */
+static void show_no_sd_flash_image(void)
+{
+    esp_err_t ret = image_viewer_start_flash("SDCard.jpg");
+    if (ret != ESP_OK)
+    {
+        /* Flash 镜像中未烧录提示图时保持纯色画面，不再显示字体错误提示。 */
+        ESP_LOGW(TAG, "Cannot display Flash SDCard.jpg: %s",
+                 esp_err_to_name(ret));
+        image_viewer_cancel();
+        spilcd_clear(BLACK);
+        return;
+    }
+
+    while (1)
+    {
+        image_viewer_state_t state = image_viewer_tick();
+        if (state == IMAGE_VIEWER_DONE)
+            return;
+        if (state == IMAGE_VIEWER_ERROR)
+        {
+            ESP_LOGW(TAG, "Flash SDCard.jpg display failed: %s",
+                     esp_err_to_name(image_viewer_last_error()));
+            image_viewer_cancel();
+            spilcd_clear(BLACK);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
 static void boot_gate(void)
 {
+    bool no_sd_image_shown = false;
+
     /* TF 卡座没有 CD 检测脚；上电后先留出卡电源和内部复位稳定时间，
      * 再执行首次枚举，避免“开机插卡失败、热插拔后成功”的时序差异。 */
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -170,7 +202,11 @@ static void boot_gate(void)
         if (sd_ret != ESP_OK)
         {
             ESP_LOGW(TAG, "SD card absent; waiting for card");
-            gbk_show_boot_text(88, 150, BLACK); /* 白底黑字: 请插入SD卡 */
+            if (!no_sd_image_shown)
+            {
+                show_no_sd_flash_image();
+                no_sd_image_shown = true;
+            }
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }

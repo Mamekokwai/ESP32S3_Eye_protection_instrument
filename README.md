@@ -9,11 +9,11 @@
 - TF 媒体：SDMMC 1-bit 40 MHz，递归扫描全部子目录；支持 MJPEG AVI、PCM/MP3、Baseline JPEG。
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
-- 中文显示：FATFS CODEPAGE_936（GBK）；启动提示用内嵌点阵字库（无卡也显示），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
+- 中文显示：FATFS CODEPAGE_936（GBK）；无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库；SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
 - UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
 - 调试转发：UART1 收到的 CA51 完整行会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG；`DBG ` 行只转发、不进入业务解析，也不会向 CA51 返回 `ERR unknown`。JTAG 可用 `CA51FWD ON|OFF` 开关，`CA51FWD?` 查询状态。
 - 低功耗睡眠：`SLEEP` 停止媒体、关闭背光并暂停 1 ms 主调度 tick，仅低频轮询 UART1/JTAG；睡眠期间仍可接收并响应控制指令，`WAKE` 恢复调度和背光。
-- 启动显示：无 TF 卡时提示“请插入SD卡”；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
+- 启动显示：无 TF 卡时显示 Flash 中的 `SDCard.jpg`；TF 卡就绪但 Flash 自动视频缺失或索引无效时显示 `READY / NO FLASH VIDEO`，不会停留在黑屏。
 - 生产安全：代码支持一次性 **通用** SD 授权令牌（P-256 签名验证 + `EYECARE_UNLOCKED` eFuse）及 Secure Boot V2/Release Flash Encryption；当前开发与生产增量配置均暂时关闭，待量产流程确认后再启用。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
 
 代码与文档的基准事实见 [CURRENT_IMPLEMENTATION.md](CURRENT_IMPLEMENTATION.md)，完整指令见 [UART_COMMANDS.md](UART_COMMANDS.md)，仓库与 Obsidian 的整理范围见 [DOCUMENTATION_ALIGNMENT.md](DOCUMENTATION_ALIGNMENT.md)。
