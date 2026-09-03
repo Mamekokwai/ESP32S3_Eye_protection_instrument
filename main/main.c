@@ -304,20 +304,21 @@ void app_main(void)
 
     app_uart_init();
 
-    /* 上电自动播放 */
-    esp_err_t auto_play_ret = flash_player_init();
-    if (auto_play_ret == ESP_OK)
+    /* 上电自动显示 Flash 启动图片；图片加载由主循环分片完成，
+     * 不在 app_main 中阻塞等待 LCD DMA。 */
+    esp_err_t auto_start_ret = image_viewer_start_flash("start.jpg");
+    if (auto_start_ret == ESP_OK)
     {
-        g_display_mode = DISPLAY_VIDEO_PLAYING;
-        ESP_LOGI(TAG, "Auto VPLAY OK");
+        g_display_mode = DISPLAY_IMAGE_LOADING;
+        ESP_LOGI(TAG, "Auto FIMG start.jpg OK");
     }
     else
     {
-        ESP_LOGW(TAG, "Auto VPLAY unavailable: %s",
-                 esp_err_to_name(auto_play_ret));
+        ESP_LOGW(TAG, "Auto FIMG start.jpg unavailable: %s",
+                 esp_err_to_name(auto_start_ret));
         spilcd_clear(WHITE);
         spilcd_show_text16(112, 136, "READY", BLUE, WHITE);
-        spilcd_show_text16(88, 168, "NO FLASH VIDEO", BLACK, WHITE);
+        spilcd_show_text16(80, 168, "NO START IMAGE", BLACK, WHITE);
     }
 
     s_tick_sem = xSemaphoreCreateBinary();
