@@ -533,6 +533,11 @@ esp_err_t audio_set_volume(int vol)
     return ESP_OK;
 }
 
+int audio_get_volume(void)
+{
+    return current_volume;
+}
+
 /* ================================================================
  * I2C 总线测试 — 持续读写 ES8311 寄存器，用于示波器观察 SCL/SDA
  * 指令: I2CTEST  →  启停

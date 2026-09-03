@@ -929,6 +929,37 @@ static void cmd_handle(const char *cmd)
         uart_send_str(r);
         return;
     }
+    /* === 音量相对调节：单符号 1，双符号 10 === */
+    if (strcasecmp(cmd, "VOL-") == 0 || strcasecmp(cmd, "VOL--") == 0 ||
+        strcasecmp(cmd, "VOL+") == 0 || strcasecmp(cmd, "VOL++") == 0)
+    {
+        bool increase = cmd[3] == '+';
+        int step = cmd[4] == '\0' ? 1 : 10;
+        int value = audio_get_volume() + (increase ? step : -step);
+        if (value < 0)
+            value = 0;
+        if (value > 100)
+            value = 100;
+        esp_err_t ret = audio_player_set_volume(value);
+        if (ret == ESP_OK)
+        {
+            esp_err_t save_ret = app_settings_save_volume((uint8_t)value);
+            if (save_ret != ESP_OK)
+                ESP_LOGW(TAG, "Volume applied but not saved: %s",
+                         esp_err_to_name(save_ret));
+            char response[32];
+            snprintf(response, sizeof(response), "OK VOL %d", value);
+            uart_send_str(response);
+        }
+        else
+        {
+            char response[48];
+            snprintf(response, sizeof(response), "ERR VOL %s",
+                     esp_err_to_name(ret));
+            uart_send_str(response);
+        }
+        return;
+    }
     if (strcasecmp(cmd, "VOL") == 0)
     {
         uart_send_str("ERR usage: VOL <0-100>");
@@ -968,6 +999,34 @@ static void cmd_handle(const char *cmd)
             snprintf(r, sizeof(r), "ERR VOL %s", esp_err_to_name(ret));
             uart_send_str(r);
         }
+        return;
+    }
+
+    /* === LCD 背光相对调节：单符号 1，双符号 10 === */
+    if (strcasecmp(cmd, "BL-") == 0 || strcasecmp(cmd, "BL--") == 0 ||
+        strcasecmp(cmd, "BL+") == 0 || strcasecmp(cmd, "BL++") == 0)
+    {
+        bool increase = cmd[2] == '+';
+        int step = cmd[3] == '\0' ? 1 : 10;
+        int value = (g_display_mode == DISPLAY_SLEEP
+                         ? s_sleep_backlight
+                         : spilcd_backlight_get()) +
+                    (increase ? step : -step);
+        if (value < 0)
+            value = 0;
+        if (value > 100)
+            value = 100;
+        if (g_display_mode == DISPLAY_SLEEP)
+            s_sleep_backlight = (uint8_t)value;
+        else
+            spilcd_backlight_set((uint8_t)value);
+        esp_err_t save_ret = app_settings_save_backlight((uint8_t)value);
+        if (save_ret != ESP_OK)
+            ESP_LOGW(TAG, "Backlight applied but not saved: %s",
+                     esp_err_to_name(save_ret));
+        char response[32];
+        snprintf(response, sizeof(response), "OK BL %d", value);
+        uart_send_str(response);
         return;
     }
 

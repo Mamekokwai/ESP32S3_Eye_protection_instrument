@@ -160,6 +160,8 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | `ASTOP` | 停止音频 | `OK ASTOP` |
 | `AMUTE` | 切换静音 | `OK AMUTE on/off` |
 | `VOL <0-100>` | 设置音量并掉电保存 | `OK VOL <value>` |
+| `VOL+` / `VOL-` | 音量增加/减少 1 | `OK VOL <value>` |
+| `VOL++` / `VOL--` | 音量增加/减少 10 | `OK VOL <value>` |
 
 音频状态与显示状态独立：`APLAY` 不会停止视频或取消图片加载，`VPLAY`、`IMG`、`SDLIST` 也不会停止音频。视频和图片共用 LCD，因此二者仍互斥。音频运行于 CPU1 独立任务，显示调度运行于 CPU0；各媒体独立播放，不做音画时间轴同步。`SLEEP` 会停止显示和音频，并暂停 1 ms 主调度 tick，进入低频 UART/JTAG 命令轮询。
 
@@ -168,6 +170,8 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | 指令 | 说明 | 成功响应 |
 | --- | --- | --- |
 | `BL <0-100>` | 设置 LCD 背光亮度百分比并掉电保存；`0` 为关闭 | `OK BL <value>` |
+| `BL+` / `BL-` | 背光增加/减少 1 | `OK BL <value>` |
+| `BL++` / `BL--` | 背光增加/减少 10 | `OK BL <value>` |
 | `BL` / `BL?` | 查询当前设定亮度 | `OK BL <value>` |
 
 背光由 GPIO1 的 1 kHz LEDC 硬件 PWM 驱动。`SLEEP` 会关闭实际 PWM 输出但保留设定值；休眠期间仍可用 `BL` 修改待恢复亮度，`WAKE` 后按该亮度恢复。

@@ -60,6 +60,9 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
  */
 esp_err_t audio_set_volume(int vol);
 
+/** @brief 获取当前音量百分比（0~100）。 */
+int audio_get_volume(void);
+
 /* ---- I2C 总线测试/恢复 (示波器诊断用) ---- */
 void audio_i2c_test_start(void);
 void audio_i2c_test_stop(void);
