@@ -11,9 +11,14 @@
 #define DEFAULT_VOLUME 70
 #define DEFAULT_BACKLIGHT 100
 
-static bool valid_percent(uint8_t value)
+static bool valid_volume(uint8_t value)
 {
-    return value <= 100;
+    return value >= APP_VOLUME_MIN && value <= APP_VOLUME_MAX;
+}
+
+static bool valid_backlight(uint8_t value)
+{
+    return value >= APP_BACKLIGHT_MIN && value <= APP_BACKLIGHT_MAX;
 }
 
 esp_err_t app_settings_init(void)
@@ -43,17 +48,17 @@ void app_settings_load(app_settings_t *settings)
 
     uint8_t value;
     if (nvs_get_u8(handle, SETTINGS_KEY_VOLUME, &value) == ESP_OK &&
-        valid_percent(value))
+        valid_volume(value))
         settings->volume = value;
     if (nvs_get_u8(handle, SETTINGS_KEY_BACKLIGHT, &value) == ESP_OK &&
-        valid_percent(value))
+        valid_backlight(value))
         settings->backlight = value;
     nvs_close(handle);
 }
 
-static esp_err_t save_percent(const char *key, uint8_t value)
+static esp_err_t save_percent(const char *key, uint8_t value, uint8_t min_value)
 {
-    if (!valid_percent(value))
+    if (value < min_value || value > 100)
         return ESP_ERR_INVALID_ARG;
 
     nvs_handle_t handle;
@@ -70,10 +75,10 @@ static esp_err_t save_percent(const char *key, uint8_t value)
 
 esp_err_t app_settings_save_volume(uint8_t volume)
 {
-    return save_percent(SETTINGS_KEY_VOLUME, volume);
+    return save_percent(SETTINGS_KEY_VOLUME, volume, APP_VOLUME_MIN);
 }
 
 esp_err_t app_settings_save_backlight(uint8_t backlight)
 {
-    return save_percent(SETTINGS_KEY_BACKLIGHT, backlight);
+    return save_percent(SETTINGS_KEY_BACKLIGHT, backlight, APP_BACKLIGHT_MIN);
 }

@@ -55,7 +55,7 @@ esp_err_t audio_write_pcm(const int16_t *samples, size_t num_samples,
 
 /**
  * @brief 按 AUDIO_VOLUME_MODE 设置 ES8311 硬件音量或 PCM 软件音量
- * @param vol 音量 0~100
+ * @param vol 音量 5~100
  * @return ESP_OK 成功；硬件模式下 I2C 写入失败返回 ESP_FAIL
  */
 esp_err_t audio_set_volume(int vol);

@@ -438,6 +438,10 @@ static bool sleep_command_allowed(const char *cmd)
            strcasecmp(cmd, "BL") == 0 ||
            strcasecmp(cmd, "BL?") == 0 ||
            strncasecmp(cmd, "BL ", 3) == 0 ||
+           strcasecmp(cmd, "BL+") == 0 ||
+           strcasecmp(cmd, "BL-") == 0 ||
+           strcasecmp(cmd, "BL++") == 0 ||
+           strcasecmp(cmd, "BL--") == 0 ||
            strcasecmp(cmd, "CA51FWD") == 0 ||
            strcasecmp(cmd, "CA51FWD?") == 0 ||
            strncasecmp(cmd, "CA51FWD ", 8) == 0 ||
@@ -936,10 +940,10 @@ static void cmd_handle(const char *cmd)
         bool increase = cmd[3] == '+';
         int step = cmd[4] == '\0' ? 1 : 10;
         int value = audio_get_volume() + (increase ? step : -step);
-        if (value < 0)
-            value = 0;
-        if (value > 100)
-            value = 100;
+        if (value < APP_VOLUME_MIN)
+            value = APP_VOLUME_MIN;
+        if (value > APP_VOLUME_MAX)
+            value = APP_VOLUME_MAX;
         esp_err_t ret = audio_player_set_volume(value);
         if (ret == ESP_OK)
         {
@@ -962,7 +966,7 @@ static void cmd_handle(const char *cmd)
     }
     if (strcasecmp(cmd, "VOL") == 0)
     {
-        uart_send_str("ERR usage: VOL <0-100>");
+        uart_send_str("ERR usage: VOL <5-100>");
         return;
     }
     if (strncasecmp(cmd, "VOL ", 4) == 0)
@@ -973,15 +977,15 @@ static void cmd_handle(const char *cmd)
             end++;
         if (end == cmd + 4 || (end && *end != '\0'))
         {
-            uart_send_str("ERR usage: VOL <0-100>");
+            uart_send_str("ERR usage: VOL <5-100>");
             return;
         }
-        int v = (parsed < INT_MIN) ? INT_MIN :
-                (parsed > INT_MAX) ? INT_MAX : (int)parsed;
-        if (v < 0)
-            v = 0;
-        if (v > 100)
-            v = 100;
+        int v = (parsed < INT_MIN) ? INT_MIN : (parsed > INT_MAX) ? INT_MAX
+                                                                  : (int)parsed;
+        if (v < APP_VOLUME_MIN)
+            v = APP_VOLUME_MIN;
+        if (v > APP_VOLUME_MAX)
+            v = APP_VOLUME_MAX;
         esp_err_t ret = audio_player_set_volume(v);
         if (ret == ESP_OK)
         {
@@ -1012,10 +1016,10 @@ static void cmd_handle(const char *cmd)
                          ? s_sleep_backlight
                          : spilcd_backlight_get()) +
                     (increase ? step : -step);
-        if (value < 0)
-            value = 0;
-        if (value > 100)
-            value = 100;
+        if (value < APP_BACKLIGHT_MIN)
+            value = APP_BACKLIGHT_MIN;
+        if (value > APP_BACKLIGHT_MAX)
+            value = APP_BACKLIGHT_MAX;
         if (g_display_mode == DISPLAY_SLEEP)
             s_sleep_backlight = (uint8_t)value;
         else
@@ -1049,12 +1053,12 @@ static void cmd_handle(const char *cmd)
             end++;
         if (end == cmd + 3 || (end && *end != '\0'))
         {
-            uart_send_str("ERR usage: BL <0-100>");
+            uart_send_str("ERR usage: BL <5-100>");
             return;
         }
-        if (value < 0 || value > 100)
+        if (value < APP_BACKLIGHT_MIN || value > APP_BACKLIGHT_MAX)
         {
-            uart_send_str("ERR BL range 0-100");
+            uart_send_str("ERR BL range 5-100");
             return;
         }
         if (g_display_mode == DISPLAY_SLEEP)

@@ -4,6 +4,7 @@
  * PCM 直接分块输出；MP3 流式解码为 16-bit PCM 后输出到 ES8311。
  */
 #include "audio_player.h"
+#include "app_settings.h"
 #include "audio.h"
 #include "media_catalog.h"
 #include "mp3_decoder_wrapper.h"
@@ -363,8 +364,8 @@ bool audio_player_is_active(void)
 esp_err_t audio_player_set_volume(int vol)
 {
     audio_lock();
-    if (vol < 0) vol = 0;
-    if (vol > 100) vol = 100;
+    if (vol < APP_VOLUME_MIN) vol = APP_VOLUME_MIN;
+    if (vol > APP_VOLUME_MAX) vol = APP_VOLUME_MAX;
     esp_err_t ret = audio_set_volume(vol);
     if (ret == ESP_OK)
         g_ap.volume = vol;

@@ -159,7 +159,7 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | `APLAY <N/filename>` | 播放指定音频 | `OK APLAY` |
 | `ASTOP` | 停止音频 | `OK ASTOP` |
 | `AMUTE` | 切换静音 | `OK AMUTE on/off` |
-| `VOL <0-100>` | 设置音量并掉电保存 | `OK VOL <value>` |
+| `VOL <5-100>` | 设置音量并掉电保存 | `OK VOL <value>` |
 | `VOL+` / `VOL-` | 音量增加/减少 1 | `OK VOL <value>` |
 | `VOL++` / `VOL--` | 音量增加/减少 10 | `OK VOL <value>` |
 
@@ -169,7 +169,7 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 
 | 指令 | 说明 | 成功响应 |
 | --- | --- | --- |
-| `BL <0-100>` | 设置 LCD 背光亮度百分比并掉电保存；`0` 为关闭 | `OK BL <value>` |
+| `BL <5-100>` | 设置 LCD 背光亮度百分比并掉电保存 | `OK BL <value>` |
 | `BL+` / `BL-` | 背光增加/减少 1 | `OK BL <value>` |
 | `BL++` / `BL--` | 背光增加/减少 10 | `OK BL <value>` |
 | `BL` / `BL?` | 查询当前设定亮度 | `OK BL <value>` |

@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "app_settings.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_common.h"
@@ -517,7 +518,7 @@ esp_err_t audio_set_volume(int vol)
 {
     if (!s_audio_ready || codec_dev == NULL)
         return ESP_ERR_INVALID_STATE;
-    if (vol < 0 || vol > 100)
+    if (vol < APP_VOLUME_MIN || vol > APP_VOLUME_MAX)
         return ESP_ERR_INVALID_ARG;
 
 #if AUDIO_VOLUME_MODE == AUDIO_VOLUME_MODE_ES8311

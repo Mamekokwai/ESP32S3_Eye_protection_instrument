@@ -46,7 +46,7 @@ void audio_player_stop(void);
 bool audio_player_is_active(void);
 
 /**
- * @brief  设置音量 0-100
+ * @brief  设置音量 5-100
  */
 esp_err_t audio_player_set_volume(int vol);
 
