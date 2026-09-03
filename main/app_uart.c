@@ -75,7 +75,12 @@ static ca51_forward_item_t s_ca51_forward_queue[CA51_FORWARD_QUEUE_LEN];
 static size_t s_ca51_forward_head;
 static size_t s_ca51_forward_tail;
 static size_t s_ca51_forward_count;
-typedef enum { CMD_SOURCE_UART1, CMD_SOURCE_USB, CMD_SOURCE_BOTH } cmd_source_t;
+typedef enum
+{
+    CMD_SOURCE_UART1,
+    CMD_SOURCE_USB,
+    CMD_SOURCE_BOTH
+} cmd_source_t;
 static cmd_source_t s_cmd_source = CMD_SOURCE_BOTH;
 /* 异步媒体结果（IMG/VID 完成或失败）返回到最近一次启动该媒体的链路。 */
 static cmd_source_t s_async_source = CMD_SOURCE_USB;
@@ -115,7 +120,8 @@ static uart_encoding_t *current_output_encoding(void)
 static size_t append_utf8(uint32_t codepoint, char *output,
                           size_t used, size_t output_size)
 {
-    size_t needed = codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2 : 3;
+    size_t needed = codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2
+                                                             : 3;
     if (used + needed >= output_size)
         return used;
 
@@ -1257,7 +1263,8 @@ static void feed_char(char ch, char *line, int *pos)
             line[*pos] = 0;
             while (*pos > 0 && line[*pos - 1] == ' ')
                 line[--(*pos)] = 0;
-            if (*pos > 0) {
+            if (*pos > 0)
+            {
                 cmd_source_t previous = s_cmd_source;
                 s_cmd_source = (line == g_usb_line) ? CMD_SOURCE_USB : CMD_SOURCE_UART1;
                 if (s_cmd_source == CMD_SOURCE_UART1)
@@ -1289,9 +1296,9 @@ void app_uart_init(void)
     uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    /* UART0 控制台在部分 ESP-IDF 配置中只使用 ROM/低层输出，并未安装
-     * UART 驱动。安装后才能安全调用 uart_read_bytes() 接收 monitor 输入。 */
-    #if 0
+/* UART0 控制台在部分 ESP-IDF 配置中只使用 ROM/低层输出，并未安装
+ * UART 驱动。安装后才能安全调用 uart_read_bytes() 接收 monitor 输入。 */
+#if 0
     if (!uart_is_driver_installed(UART_NUM_0))
     {
         esp_err_t ret = uart_driver_install(
@@ -1316,7 +1323,7 @@ void app_uart_init(void)
 
     /* 原生 Type-C 的 USB Serial-JTAG 通道。若 ESP-IDF 控制台尚未安装
      * 驱动，则由业务 UART 初始化主动安装一个非阻塞驱动。 */
-    #endif
+#endif
     if (!usb_serial_jtag_is_driver_installed())
     {
         usb_serial_jtag_driver_config_t usb_cfg =
