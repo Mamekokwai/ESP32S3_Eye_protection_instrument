@@ -2,16 +2,16 @@
 # ============================================================
 #  将多个 AVI/JPEG 按参数顺序打包并烧录到 Flash storage 分区
 #
-#  用法: ./flash_video.sh                         (使用配置中的 FILES/FILE)
-#        ./flash_video.sh a.avi b.jpg c.avi       (按给定顺序打包)
+#  用法: ./flash_media.sh                         (使用配置中的 FILES/FILE)
+#        ./flash_media.sh a.avi b.jpg c.avi       (按给定顺序打包)
 #
-#  配置: flash_video.conf (同目录)
+#  配置: flash_media.conf (同目录)
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG="$SCRIPT_DIR/flash_video.conf"
+CONFIG="$SCRIPT_DIR/flash_media.conf"
 
 # ---- 加载配置 ----
 PORT=/dev/ttyACM0
