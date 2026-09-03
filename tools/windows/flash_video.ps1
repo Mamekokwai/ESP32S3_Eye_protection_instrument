@@ -58,7 +58,7 @@ if ($Files.Count -gt 0) {
             }
         }
     }
-    # 与 Linux 脚本一致：配置了 FILES 时忽略兼容用的 FILE，避免重复打包。
+    # Keep FILE only as a fallback when FILES is empty.
     if ($mediaFiles.Count -eq 0 -and $legacyFile) {
         [void]$mediaFiles.Add($legacyFile)
     }
@@ -70,7 +70,7 @@ if ($mediaFiles.Count -eq 0) {
     exit 1
 }
 
-# 相对路径转绝对
+# Convert relative paths to absolute paths.
 for ($i = 0; $i -lt $mediaFiles.Count; $i++) {
     if (-not [IO.Path]::IsPathRooted($mediaFiles[$i])) {
         $mediaFiles[$i] = Join-Path $projectDir $mediaFiles[$i]
