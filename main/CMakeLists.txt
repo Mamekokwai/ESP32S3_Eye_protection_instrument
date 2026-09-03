@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_uart.c"
+        "app_settings.c"
         "production_unlock.c"
         "esp_efuse_custom_table.c"
         "audio_player.c"
@@ -20,4 +21,4 @@ idf_component_register(
     # "testimage_data.c"
     INCLUDE_DIRS "." "include"
     EMBED_FILES "canon.pcm"
-    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support fatfs vfs esp_driver_usb_serial_jtag)
+    REQUIRES BSP esp_timer spi_flash esp_adc esp_mm efuse mbedtls bootloader_support fatfs vfs nvs_flash esp_driver_usb_serial_jtag)

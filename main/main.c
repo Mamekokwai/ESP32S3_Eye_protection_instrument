@@ -22,6 +22,7 @@
 #include "image_viewer.h"
 #include "app_uart.h"
 #include "production_unlock.h"
+#include "app_settings.h"
 #include "gbk_font.h"
 #include "esp_efuse.h"
 #include "esp_efuse_custom_table.h"
@@ -284,9 +285,29 @@ void app_main(void)
     ESP_LOGW(TAG, "Reset reason: %d (%s)", reset_reason,
              reset_reason_name(reset_reason));
 
+    /* NVS 和用户参数必须在打开 LCD 背光前读取，避免上电瞬间亮度跳变。 */
+    app_settings_t settings = {
+        .volume = 70,
+        .backlight = 100,
+    };
+    esp_err_t settings_ret = app_settings_init();
+    if (settings_ret == ESP_OK)
+        app_settings_load(&settings);
+    else
+        ESP_LOGW(TAG, "Settings NVS unavailable: %s; using defaults",
+                 esp_err_to_name(settings_ret));
+    ESP_LOGI(TAG, "Saved settings: volume=%u backlight=%u",
+             settings.volume, settings.backlight);
+
     /* 硬件初始化: 先 LCD (背光/显示), 再进入启动门 */
     ESP_LOGI(TAG, "LCD init");
     spilcd_init();
+
+    /* LCD 控制器先完成初始化，背光继续保持关闭；延迟 1 s 后才点亮。 */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    spilcd_backlight_set(settings.backlight);
+    ESP_LOGI(TAG, "Backlight enabled after startup delay: %u%%",
+             settings.backlight);
 
     /* 启动门: 无卡提示 / 未解锁提示, 直到条件满足 */
     boot_gate();
@@ -300,6 +321,13 @@ void app_main(void)
     if (audio_ret != ESP_OK)
         ESP_LOGE(TAG, "Audio init failed (%s); video/display will continue",
                  esp_err_to_name(audio_ret));
+    else
+    {
+        esp_err_t volume_ret = audio_set_volume(settings.volume);
+        if (volume_ret != ESP_OK)
+            ESP_LOGW(TAG, "Cannot apply saved volume %u: %s",
+                     settings.volume, esp_err_to_name(volume_ret));
+    }
     ESP_ERROR_CHECK(audio_player_start_service());
 
     app_uart_init();

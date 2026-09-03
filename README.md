@@ -8,6 +8,7 @@
 - Flash 媒体：`storage` FAT 分区保存 AVI/MJPEG 和 JPEG；Flash 视频跳过 AVI 音频块。
 - TF 媒体：SDMMC 1-bit 40 MHz，递归扫描全部子目录；支持 MJPEG AVI、PCM/MP3、Baseline JPEG。无 CD 检测脚时每 2 s 探测卡状态，拔卡自动停止 SD 播放并卸载，重新插卡后自动挂载；`IMG` 遇到拔卡/无卡时统一显示 Flash `SDCard.jpg`。
 - 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
+- 用户设置：音量和背光亮度保存到 NVS，重启后恢复；LCD 背光启动时先关闭，读取配置后延迟 1 s 开启。
 - DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
 - 中文显示：FATFS CODEPAGE_936（GBK）；无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库；SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
 - UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。

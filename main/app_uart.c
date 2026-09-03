@@ -36,6 +36,7 @@
 #include "sd_browser.h"
 #include "sd_card.h"
 #include "image_viewer.h"
+#include "app_settings.h"
 
 #define TAG "uart"
 
@@ -953,6 +954,10 @@ static void cmd_handle(const char *cmd)
         esp_err_t ret = audio_player_set_volume(v);
         if (ret == ESP_OK)
         {
+            esp_err_t save_ret = app_settings_save_volume((uint8_t)v);
+            if (save_ret != ESP_OK)
+                ESP_LOGW(TAG, "Volume applied but not saved: %s",
+                         esp_err_to_name(save_ret));
             char r[32];
             snprintf(r, sizeof(r), "OK VOL %d", v);
             uart_send_str(r);
@@ -997,6 +1002,10 @@ static void cmd_handle(const char *cmd)
             s_sleep_backlight = (uint8_t)value;
         else
             spilcd_backlight_set((uint8_t)value);
+        esp_err_t save_ret = app_settings_save_backlight((uint8_t)value);
+        if (save_ret != ESP_OK)
+            ESP_LOGW(TAG, "Backlight applied but not saved: %s",
+                     esp_err_to_name(save_ret));
         char response[32];
         snprintf(response, sizeof(response), "OK BL %ld", value);
         uart_send_str(response);

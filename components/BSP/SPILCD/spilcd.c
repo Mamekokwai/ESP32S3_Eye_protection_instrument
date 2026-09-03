@@ -95,11 +95,11 @@ esp_err_t spilcd_init(void)
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .timer_sel = LEDC_TIMER_0,
-        .duty = 255, /* 默认 100% 亮度 */
+        .duty = 0, /* 启动阶段保持背光关闭，待系统读取配置后再开启 */
         .hpoint = 0,
     };
     ESP_ERROR_CHECK(ledc_channel_config(&bl_ch));
-    ESP_LOGI(TAG, "Backlight: GPIO%d PWM 1kHz 100%% (V1.4)", LCD_BACKLIGHT);
+    ESP_LOGI(TAG, "Backlight: GPIO%d PWM 1kHz startup OFF (V1.4)", LCD_BACKLIGHT);
 
     /* 1. 创建 i80 总线 */
     esp_lcd_i80_bus_handle_t i80_bus = NULL;

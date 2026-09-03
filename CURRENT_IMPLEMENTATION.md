@@ -9,7 +9,7 @@
 | MCU/存储 | ESP32-S3-WROOM-1，16 MiB Flash，8 MiB Octal PSRAM | `sdkconfig.defaults`、板级资料 |
 | LCD | 两块 JD9855 320×320，8-bit i80，共享 DB0–DB7/WR/D-C，CS1=17、CS2=18 | `components/BSP/SPILCD/` |
 | LCD 引脚 | DB0–7=6–13、WR=46、D/C=38、RESET=3；无 TE（V1.4 无 TE 引脚） | `components/BSP/SPILCD/` |
-| 背光 | V1.4：GPIO1=PWM_LED，LEDC PWM（1 kHz/8bit）→ Q3 → LEDK；默认 100%，`spilcd_backlight_set()` 调光 | `components/BSP/SPILCD/spilcd.c` |
+| 背光 | V1.4：GPIO1=PWM_LED，LEDC PWM（1 kHz/8bit）→ Q3 → LEDK；启动时先关闭，读取 NVS 后延迟 1 s 按保存值开启，`spilcd_backlight_set()` 调光 | `components/BSP/SPILCD/spilcd.c`、`main/app_settings.c` |
 | TF 卡 | 首选 SDMMC 1-bit 40 MHz：CLK=21、CMD=47、D0=14；SPI fallback 最高 20 MHz | `components/BSP/SD_CARD/` |
 | 音频 | ES8311；I2C 4/5，I2S MCLK45/BCLK39/WS41/DOUT42，功放 GPIO2 高有效 | `main/audio.c` |
 | UART | UART1（RX GPIO44/TX GPIO43）及原生 USB Serial-JTAG 独立双向通信；响应返回来源链路；UART1 默认 GBK、USB 默认 UTF-8，可用 `ENC`/`ENC?` 独立配置和查询；UART1 完整行异步转发到 JTAG（`CA51 ` 前缀），`DBG ` 调试行不执行且不响应；JTAG 可用 `CA51FWD ON|OFF` 开关并用 `CA51FWD?` 查询；支持背光控制 | `main/app_uart.c` |
@@ -33,6 +33,7 @@ SD 视频只使用 AVI `SecPerFrame` 做帧率控制，并以 LCD DMA 完成事�
 | 项目 | 当前实现 |
 |---|---|
 | 启动门与热插拔 | `app_main` 先 `spilcd_init` 再 `boot_gate()`：TF 卡座无 CD 检测脚，首次挂载前等待 300 ms，每次挂载最多重试 3 次（间隔 100 ms）；无 SD 卡时显示 Flash 中的 `SDCard.jpg`（不依赖字库）并重试。运行中每 2 s 用 CMD13 探测卡状态，拔卡时先停止 SD 视频/音频并卸载文件系统，重新插卡后自动重挂载；已挂载且在线时不会重复卸载挂载。`IMG` 执行前和读取失败后均复核 SD 状态，确认无卡时统一切换到 Flash `SDCard.jpg`，不显示 `IMAGE ERROR` 字体页。加密开启且未解锁显示`请解密`并尝试解锁，通过后进入正常启动。启动门通过后自动分片显示 Flash `start.jpg`，不再自动播放 Flash 视频；启动图缺失时显示 `READY / NO START IMAGE`。 |
+| 用户设置 | NVS 命名空间 `eyecare` 保存 `volume`、`backlight` 两个 0~100 参数；启动最前面读取，音频初始化后应用音量，LCD 初始化后延迟 1 s 应用背光；`VOL`/`BL` 设置成功后立即提交 NVS，掉电后恢复。 |
 | 中文字库 | ① 内嵌 `gbk_embedded_font.h`（解密提示等无卡后续流程），② TF 卡 `/SYSTEM/FONT/GBK16.FON`（完整 GBK16 字库，SDLIST 任意中文文件名）。无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库。FATFS 用 CODEPAGE_936 + ANSI/OEM，`d_name` 返回 GBK 双字节 |
 | 主循环 | 正常模式为 1 ms tick、5 个 cooperative workspace，视频每 1 ms 快速服务；`SLEEP` 时停止 tick，仅每 20 ms 轮询 UART1/JTAG 命令，`WAKE` 后恢复调度 |
 | Flash 视频 | AVI/MJPEG，mmap `storage`，兼容媒体索引 v1/v2，PSRAM 双帧，2×40 行内部 SRAM DMA 条带 |
