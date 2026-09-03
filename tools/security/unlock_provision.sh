@@ -4,7 +4,7 @@
 #
 #  流程: 1) 检测解锁密钥是否存在 (存在则退出, 防覆盖)
 #        2) 生成 ECDSA P-256 密钥对 (generate-key)
-#        3) 导出公钥为固件头文件 (export-public → main/unlock_public_key.h)
+#        3) 导出公钥为固件头文件 (export-public → main/include/unlock_public_key.h)
 #        4) 签发通用解锁令牌 (issue → eyecare.unlock)
 #        5) 用公钥复核令牌 (verify)
 #
@@ -30,7 +30,7 @@ TOOL="$SCRIPT_DIR/unlock_token.py"
 KEY_DIR="${EYECARE_KEY_DIR:-$PROJECT_ROOT/info/HTML/key}"
 PRIVATE_KEY="${EYECARE_PRIVATE_KEY:-$KEY_DIR/eyecare_unlock_ecdsa_p256}"
 PUBLIC_KEY="${PRIVATE_KEY}.pub"
-PUBLIC_HEADER="${EYECARE_PUBLIC_HEADER:-$PROJECT_ROOT/main/unlock_public_key.h}"
+PUBLIC_HEADER="${EYECARE_PUBLIC_HEADER:-$PROJECT_ROOT/main/include/unlock_public_key.h}"
 TOKEN_OUTPUT="${EYECARE_TOKEN_OUTPUT:-$PWD/eyecare.unlock}"
 PYTHON="${EYECARE_PYTHON:-}"
 

@@ -228,7 +228,7 @@ def main() -> None:
         bootloader,
         unlock_key_path,
         secure_boot_key_path,
-        project / "main/unlock_public_key.h",
+        project / "main/include/unlock_public_key.h",
     ]
     missing = [str(path) for path in required_files if not path.is_file()]
     if missing:
@@ -239,7 +239,7 @@ def main() -> None:
     unlock_key, _secure_boot_key = load_keys(
         unlock_key_path, secure_boot_key_path
     )
-    check_embedded_public_key(project / "main/unlock_public_key.h", unlock_key)
+    check_embedded_public_key(project / "main/include/unlock_public_key.h", unlock_key)
     check_ignored(project, [unlock_key_path, secure_boot_key_path])
     check_binary_markers([app, bootloader])
     verify_secure_boot_signatures(project, secure_boot_key_path, [app, bootloader])

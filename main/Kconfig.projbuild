@@ -5,7 +5,7 @@ menu "Eye-care production security"
         default n
         select EFUSE_CUSTOM_TABLE
         help
-            Enables EYECARE_ENABLE_ENCRYPTION in main/production_unlock.h.
+            Enables EYECARE_ENABLE_ENCRYPTION in main/include/production_unlock.h.
             On a device whose permanent unlock eFuse is not set, start only
             the SD-card unlock loop. A shared ECDSA P-256 signed token must
             be present at /eyecare.unlock (not device-bound; one card unlocks

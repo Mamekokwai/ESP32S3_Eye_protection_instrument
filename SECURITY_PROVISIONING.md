@@ -19,7 +19,7 @@
 | 资产 | 算法 | 放置位置 | 用途 |
 |---|---|---|---|
 | 解锁签名私钥 | ECDSA P-256 OpenSSH | 工厂离线机/HSM；本地忽略路径 `info/HTML/key/eyecare_unlock_ecdsa_p256` | 为所有设备签发同一把通用解锁令牌 |
-| 解锁公钥 | P-256 DER | 编译进 `main/unlock_public_key.h` | 设备验证令牌，不是秘密 |
+| 解锁公钥 | P-256 DER | 编译进 `main/include/unlock_public_key.h` | 设备验证令牌，不是秘密 |
 | Secure Boot 私钥 | RSA-3072 PEM | 工厂离线机/HSM；本地忽略路径 `info/HTML/key/secure_boot_signing_key.pem` | 签名 bootloader/应用 |
 
 原有 `info/HTML/key/260604-Embed_EyeCare_ESP32S3_320x320` 是 Ed25519 SSH 密钥。ESP-IDF 5.4.4 自带的 Mbed TLS 不提供本方案所需的 Ed25519 验证实现，因此它没有被修改，也没有放入固件；解锁专用密钥改用 P-256。私钥绝不能复制到 TF 卡、固件、构建产物或版本库。

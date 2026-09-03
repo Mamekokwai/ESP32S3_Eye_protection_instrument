@@ -1,11 +1,11 @@
 # ============================================================
-# 生成内嵌 GBK16 汉字点阵头文件 main/gbk_embedded_font.h
+# 生成内嵌 GBK16 汉字点阵头文件 main/include/gbk_embedded_font.h
 # 用于 boot_gate 启动提示 (无 TF 卡时也显示中文):
 #   "请插入SD卡" → 请,插,入,卡 + ASCII "SD"
 #   "请解密"     → 请,解,密
 # 每个汉字 16x16 = 32 字节, 用 System.Drawing(SimSun) 渲染。
 # ============================================================
-param([string]$Output = "main/gbk_embedded_font.h")
+param([string]$Output = "main/include/gbk_embedded_font.h")
 
 Add-Type -AssemblyName System.Drawing
 
