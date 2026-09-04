@@ -10,5 +10,5 @@
     "IDF_TARGET": "esp32s3"
   },
   "idf.currentSetup": "C:\\Users\\ZeroThrax\\.espressif\\v5.4.4\\esp-idf",
-  "idf.portWin": "COM16"
+  "idf.portWin": "COM17"
 }
