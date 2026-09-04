@@ -245,6 +245,22 @@ static size_t utf8_to_gbk(const char *input, char *output, size_t output_size)
     return used;
 }
 
+/* FATFS 使用 CODEPAGE_936，媒体路径必须传入 GBK。USB Serial-JTAG 默认
+ * 接收 UTF-8；UART1 默认接收 GBK。数字索引和纯 ASCII 路径也经过此函数，
+ * 不需要额外分支。 */
+static const char *media_argument_gbk(const char *argument,
+                                      char *converted, size_t converted_size)
+{
+    uart_encoding_t input_encoding = s_cmd_source == CMD_SOURCE_UART1
+                                         ? s_uart1_encoding
+                                         : s_usb_encoding;
+    if (input_encoding == UART_ENCODING_GBK)
+        return argument;
+
+    utf8_to_gbk(argument, converted, converted_size);
+    return converted;
+}
+
 static size_t make_response_line(const char *message,
                                  uart_encoding_t source_encoding,
                                  uart_encoding_t output_encoding,
@@ -675,6 +691,7 @@ static void cmd_handle(const char *cmd)
     if (strncasecmp(cmd, "VID ", 4) == 0)
     {
         const char *arg = cmd + 4;
+        char arg_gbk[UART_LINE_SIZE];
         while (*arg == ' ')
             arg++;
         if (!*arg)
@@ -688,7 +705,8 @@ static void cmd_handle(const char *cmd)
             image_viewer_cancel();
         g_display_mode = DISPLAY_IDLE;
 
-        esp_err_t ret = video_player_start(arg);
+        esp_err_t ret = video_player_start(
+            media_argument_gbk(arg, arg_gbk, sizeof(arg_gbk)));
         if (ret == ESP_OK)
         {
             s_async_source = s_cmd_source;
@@ -829,6 +847,7 @@ static void cmd_handle(const char *cmd)
     if (strncasecmp(cmd, "IMG ", 4) == 0)
     {
         const char *arg = cmd + 4;
+        char arg_gbk[UART_LINE_SIZE];
         while (*arg == ' ')
             arg++;
         if (!*arg)
@@ -855,7 +874,8 @@ static void cmd_handle(const char *cmd)
             return;
         }
 
-        esp_err_t ret = image_viewer_start(arg);
+        esp_err_t ret = image_viewer_start(
+            media_argument_gbk(arg, arg_gbk, sizeof(arg_gbk)));
         if (ret == ESP_OK)
         {
             s_async_source = s_cmd_source;
@@ -903,6 +923,7 @@ static void cmd_handle(const char *cmd)
     if (strncasecmp(cmd, "APLAY ", 6) == 0)
     {
         const char *arg = cmd + 6;
+        char arg_gbk[UART_LINE_SIZE];
         while (*arg == ' ')
             arg++;
 
@@ -910,7 +931,8 @@ static void cmd_handle(const char *cmd)
         {
             uart_send_str("ERR audio codec not ready");
         }
-        else if (audio_player_start(arg) == ESP_OK)
+        else if (audio_player_start(
+                     media_argument_gbk(arg, arg_gbk, sizeof(arg_gbk))) == ESP_OK)
         {
             uart_send_str("OK APLAY");
         }

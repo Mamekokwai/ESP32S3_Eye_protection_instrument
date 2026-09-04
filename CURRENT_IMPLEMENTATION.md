@@ -40,7 +40,7 @@ SD 视频只使用 AVI `SecPerFrame` 做帧率控制，并以 LCD DMA 完成事�
 | TF 视频 | MJPEG AVI ≤320×320，32 KiB 流读取，PSRAM 双帧，1×160 行 DMA 条带 |
 | 图片 | Baseline JPEG ≤1 MiB、≤320×320，32 KiB 分块读，1×80 行 DMA 条带 |
 | 音频 | TF `.pcm/.mp3`，CPU1 独立 5 ms 服务，ES8311 固定输出链路；`APLAY` 按 `ALIST` 递归索引自动轮播，单曲时循环，`ASTOP` 关闭轮播 |
-| TF 目录 | `VIDLIST`、`IMGLIST`、`ALIST` 递归扫描；索引是 FAT 遍历顺序；内部使用 GBK 中文相对路径（FATFS CODEPAGE_936），UART 输出可选 GBK/UTF-8 |
+| TF 目录 | `VIDLIST`、`IMGLIST`、`ALIST` 递归扫描；索引是 FAT 遍历顺序；内部使用 GBK 中文相对路径（FATFS CODEPAGE_936）；JTAG 默认 UTF-8 输入在 `IMG`/`VID`/`APLAY` 前转换为 GBK，UART1 默认按 GBK 接收；UART 输出可选 GBK/UTF-8 |
 | 屏幕目录 | `SDLIST` 只浏览根目录，这是独立 UI 功能 |
 
 ## Flash 分区
