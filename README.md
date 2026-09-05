@@ -10,4 +10,4 @@
 - [量产前 TODO](doc/TODO.md)
 - [文档一致性清单](doc/DOCUMENTATION_ALIGNMENT.md)
 
-源码、工具和硬件资料仍按工程目录组织；`AGENTS.md`、`CLAUDE.md`、`CODEBUDDY.md` 为仓库开发规则文件，保留在根目录供开发工具读取。
+源码、工具和硬件资料仍按工程目录组织；`AGENTS.md` 是唯一的仓库 AI/开发规则文件，保留在根目录供开发工具读取。

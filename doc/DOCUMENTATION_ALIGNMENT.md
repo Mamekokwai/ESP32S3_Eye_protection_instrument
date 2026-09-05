@@ -10,8 +10,7 @@
 | `SECURITY_PROVISIONING.md` | 已对齐 | 密钥分工、通用令牌、生产构建、不可逆烧录与验收 |
 | `PORTING.md` | 已对齐 | 与芯片型号无关的模块、UART 和 workspace 移植说明 |
 | `TODO.md` | 已对齐 | 量产前安全、工具链和验收事项 |
-| `AGENTS.md` | 已对齐 | 含"文档-固件同步规则"章节 |
-| `CLAUDE.md` / `CODEBUDDY.md` | 已对齐 | 开发助手入口，指向 V1.4 与统一基准 |
+| `AGENTS.md` | 唯一 AI 入口 | 仓库开发规则、当前硬件约束和 AI 工作上下文 |
 | `Map/media_pipeline_archify.md` | 已对齐 | 媒体与生产启动链路（通用令牌） |
 | `Map/sd-resource-rule.architecture.json` + HTML | 已同步 | TF 递归目录及当前工具路径 |
 | `Map/production-unlock.html` + JSON | 已同步 | 生产解锁生命周期图（通用令牌） |

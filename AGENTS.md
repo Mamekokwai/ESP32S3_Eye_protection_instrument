@@ -52,6 +52,12 @@ Do not commit generated `build/` output, private media, or device-specific secre
 1. **Obsidian 硬件笔记**：`E:\Note\Obsidian\笔记\开发\嵌入式\项目\2026\0604眼保仪_ESP32S3_320x320\硬件设计\关键硬件网络连接.md` —— 更新对应脚位表/链路/差异标注，`updated` 日期同步更新。
 2. **仓库事实表**：`doc/CURRENT_IMPLEMENTATION.md` —— 更新硬件与总线表中受影响的行，删除过时的旧表述。
 3. **Obsidian 软件/项目笔记**（若涉及）：UART 指令、媒体、解锁等文档同步更新。
-4. 检查 `AGENTS.md`/`CLAUDE.md`/`README.md`/`doc/UART_COMMANDS.md` 中是否有与该改动冲突的旧表述，一并修正。
+4. 检查 `AGENTS.md`/`README.md`/`doc/UART_COMMANDS.md` 中是否有与该改动冲突的旧表述，一并修正。
 
 网络表（V1.1 与 V1.4 不兼容）与固件冲突时：以 V1.4 网络表为准，固件需适配；差异要在 `关键硬件网络连接.md` 中标注 ⚠️ 与"固件待适配/已适配"状态。
+
+## AI 工作上下文
+
+本文件是本仓库唯一的 AI/开发助手上下文入口。当前事实基准为 [`doc/CURRENT_IMPLEMENTATION.md`](doc/CURRENT_IMPLEMENTATION.md)，项目说明与构建指南为 [`doc/README.md`](doc/README.md)，完整 UART 协议为 [`doc/UART_COMMANDS.md`](doc/UART_COMMANDS.md)，移植说明为 [`doc/PORTING.md`](doc/PORTING.md)，生产安全流程为 [`doc/SECURITY_PROVISIONING.md`](doc/SECURITY_PROVISIONING.md)。
+
+不要恢复历史的 QSPI、MAX98357、无 TF 卡方案。V1.4 无 TE 引脚，GPIO1 是 ESP32 LEDC 背光 PWM；`VIDLIST`、`IMGLIST`、`ALIST` 递归扫描 TF 子目录，只有 `SDLIST` 浏览根目录。普通开发任务不得烧录生产安全配置或写入 eFuse。
