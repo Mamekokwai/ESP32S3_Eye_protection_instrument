@@ -114,7 +114,7 @@ VLIST / VIDLIST / ALIST / FIMGLIST / IMGLIST
 
 | 指令 | 说明 | 成功响应 |
 | --- | --- | --- |
-| `VIDLIST` | 列出 TF 卡根目录中的 AVI 视频及序号 | `VIDLIST` 后跟列表 |
+| `VIDLIST` | 递归列出 TF 卡中的 AVI 视频及序号 | `VIDLIST` 后跟列表 |
 | `VID <N>` | 播放 TF 卡中第 N 个 AVI | `OK VID <filename>` |
 | `VID <filename.avi>` | 按文件名播放 TF 卡 AVI | `OK VID <filename>` |
 
@@ -145,7 +145,7 @@ Flash 和 TF 视频均要求 AVI/MJPEG，最大分辨率为 320×320。播放器
 | 指令 | 说明 |
 | --- | --- |
 | `SDLIST [page]` | 在 LCD 上分页显示 TF 卡根目录 |
-| `IMGLIST` | 返回根目录中的 `.jpg/.jpeg` 文件及序号 |
+| `IMGLIST` | 递归返回 TF 卡中的 `.jpg/.jpeg` 文件及序号 |
 | `IMG <N>` | 显示第 N 个 JPEG 文件 |
 | `IMG <filename.jpg>` | 按文件名显示 JPEG |
 

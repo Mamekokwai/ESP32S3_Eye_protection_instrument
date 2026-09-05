@@ -1,4 +1,4 @@
-# info/Map 说明
+# doc/Map 说明
 
 本目录存放 Archify 流程图/架构图。
 

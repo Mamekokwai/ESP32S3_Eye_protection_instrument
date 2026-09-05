@@ -1,106 +1,13 @@
 # ESP32-S3 眼保仪固件
 
-本项目是 YT06 主板（V1.4 为当前硬件）的 ESP-IDF v5.4.4 固件，目标芯片为 ESP32-S3-WROOM-1（16 MiB Flash、8 MiB Octal PSRAM）。设备驱动两块 320×320 JD9855 圆屏、ES8311 音频、TF 卡，并通过 CA51F352P4 发来的 UART 指令控制。
+项目文档已统一收录在 [`doc/`](doc/)：
 
-## 当前实现
+- [项目说明与构建指南](doc/README.md)
+- [当前实现基准](doc/CURRENT_IMPLEMENTATION.md)
+- [UART 指令手册](doc/UART_COMMANDS.md)
+- [代码移植指南](doc/PORTING.md)
+- [生产安全与解锁流程](doc/SECURITY_PROVISIONING.md)
+- [量产前 TODO](doc/TODO.md)
+- [文档一致性清单](doc/DOCUMENTATION_ALIGNMENT.md)
 
-- 显示：双 JD9855 共用 8-bit i80 数据总线，RGB565；视频与图片共用 LCD，互斥运行。
-- Flash 媒体：`storage` FAT 分区保存 AVI/MJPEG 和 JPEG；Flash 视频跳过 AVI 音频块。
-- TF 媒体：SDMMC 1-bit 40 MHz，递归扫描全部子目录；支持 MJPEG AVI、PCM/MP3、Baseline JPEG。无 CD 检测脚时每 2 s 探测卡状态，拔卡自动停止 SD 播放并卸载，重新插卡后自动挂载；`IMG` 遇到拔卡/无卡时统一显示 Flash `SDCard.jpg`。
-- 调度：CPU0 使用 1 ms tick 和 5 个 workspace；视频每 1 ms 服务，图片分阶段处理；音频在 CPU1 独立任务中每 5 ms 服务。
-- 用户设置：音量和背光亮度保存到 NVS，重启后恢复；LCD 背光启动时先关闭，读取配置后延迟 1 s 开启。
-- 音量/背光支持 `VOL+`、`VOL-`（步进 1）及 `VOL++`、`VOL--`（步进 10），背光对应 `BL+`、`BL-`、`BL++`、`BL--`；两者均限制在 5~100，边界可通过独立宏调整。
-- `APLAY <N/filename>` 从指定音频开始按 `ALIST` 的递归索引顺序自动轮播；多首播完回到第一首，只有一首时循环该曲，`ASTOP` 会停止轮播。
-- DMA：媒体帧保存在 PSRAM，提交 LCD 前复制到内部 SRAM 条带。Flash 视频条带为 40 行×2，TF 视频为 160 行×1，图片为 80 行×1。
-- 中文显示：FATFS CODEPAGE_936（GBK）；无 SD 卡启动画面使用 Flash 中的 `SDCard.jpg`，不依赖字库；SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`。
-- JTAG 文件名输入默认 UTF-8，固件在 `IMG`、`VID`、`APLAY` 执行前转换为 FATFS 所需的 GBK；UART1 默认按 GBK 接收。
-- UART 中文响应：UART1 默认 GBK 以兼容 CA51，USB Serial-JTAG 默认 UTF-8；两路可分别用 `ENC UTF8`、`ENC GBK` 配置，用 `ENC?` 查询。
-- 调试转发：UART1 收到的 CA51 完整行会以 `CA51 ` 前缀异步转发到 USB Serial-JTAG；`DBG ` 行只转发、不进入业务解析，也不会向 CA51 返回 `ERR unknown`。JTAG 可用 `CA51FWD ON|OFF` 开关，`CA51FWD?` 查询状态。
-- 低功耗睡眠：`SLEEP` 停止媒体、关闭背光并暂停 1 ms 主调度 tick，仅低频轮询 UART1/JTAG；睡眠期间仍可接收并响应控制指令，`WAKE` 恢复调度和背光。
-- 启动显示：无 TF 卡时显示 Flash 中的 `SDCard.jpg`；TF 卡就绪后自动分片显示 Flash `start.jpg`，不再自动播放 Flash 视频；启动图缺失或索引无效时显示 `READY / NO START IMAGE`。
-- 生产安全：代码支持一次性 **通用** SD 授权令牌（P-256 签名验证 + `EYECARE_UNLOCKED` eFuse）及 Secure Boot V2/Release Flash Encryption；当前开发与生产增量配置均暂时关闭，待量产流程确认后再启用。详见 [SECURITY_PROVISIONING.md](SECURITY_PROVISIONING.md)。
-
-代码与文档的基准事实见 [CURRENT_IMPLEMENTATION.md](CURRENT_IMPLEMENTATION.md)，完整指令见 [UART_COMMANDS.md](UART_COMMANDS.md)，仓库与 Obsidian 的整理范围见 [DOCUMENTATION_ALIGNMENT.md](DOCUMENTATION_ALIGNMENT.md)。
-
-## 目录
-
-```text
-main/                         应用状态机、UART、媒体播放与生产解锁
-components/BSP/               LCD、SDMMC/SPI fallback、I2C 板级驱动
-components/esp_lcd_jd9855/    JD9855 面板驱动和初始化序列
-tools/linux/                  视频转换、Flash 媒体写入脚本
-tools/security/               生产授权令牌工具（`unlock_token.py` + 一键脚本 `unlock_provision.sh`）
-partitions.csv                16 MiB Flash 分区表
-sdkconfig.defaults            开发/公共默认配置
-sdkconfig.production.defaults 生产安全增量配置
-```
-
-## 构建
-
-加载本机 ESP-IDF v5.4.4 环境后：
-
-```bash
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
-```
-
-Linux 媒体工具：
-
-```bash
-./tools/linux/convert_mp4_to_avi.sh input.mp4
-./tools/linux/flash_video.sh output.avi
-```
-
-Windows PowerShell 媒体烧录：
-
-```powershell
-# 使用 tools/windows/flash_video.conf 中的配置
-.\tools\windows\flash_video.ps1
-
-# 临时覆盖串口、波特率和媒体文件
-.\tools\windows\flash_video.ps1 -Port COM16 -Baud 921600 video.avi image.jpg
-```
-
-若 PowerShell 执行策略阻止脚本，可在当前终端运行
-`Set-ExecutionPolicy -Scope Process Bypass`。该工具只写入 `storage` 媒体分区，
-不会烧录应用固件或修改 eFuse。
-
-生产构建必须使用独立配置文件和构建目录；不要让仓库根目录的开发 `sdkconfig` 覆盖安全默认值：
-
-```bash
-idf.py -B build-production \
-  -D SDKCONFIG=sdkconfig.production \
-  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.production.defaults' \
-  build
-```
-
-生产镜像首次启动会执行不可逆的安全 eFuse 操作。先阅读生产指南，并只在备用板上走通全流程；不要直接在开发板执行生产 `flash`。
-
-生产构建完成后可运行 `python tools/security/production_preflight.py --build-dir build-production` 做只读预检。
-
-## 关键引脚
-
-| 功能 | GPIO |
-|---|---|
-| LCD DB0–DB7 | 6–13 |
-| LCD WR / D/C / CS1 / CS2 / RESET | 46 / 38 / 17 / 18 / 3 |
-| 背光 PWM（V1.4，GPIO1 → Q3 → LEDK，LEDC 默认 100%） | 1 |
-| SDMMC CLK / CMD / D0 | 21 / 47 / 14 |
-| ES8311 I2C SDA / SCL | 4 / 5 |
-| I2S MCLK / BCLK / WS / DOUT | 45 / 39 / 41 / 42 |
-| 功放使能 | 2，高电平开启 |
-| UART1 RX（业务输入） | 44 |
-| UART1 TX（CA51 响应） | 43 |
-
-GPIO0 不参与当前 SDMMC 1-bit 数据传输。GPIO38 是 LCD D/C，不是 UART TX。V1.4 无 TE 引脚（GPIO1 为背光 PWM，非 TE 帧同步）。
-
-## 媒体约束
-
-- TF 视频：`.avi`、MJPEG、最大 320×320；AVI 内音频块被跳过。
-- 图片：Baseline `.jpg/.jpeg`、最大 1 MiB、解码尺寸不超过 320×320；不支持 Progressive JPEG。
-- TF 音频：`.pcm` 或 `.mp3`；PCM 约定为 16-bit、单声道、16 kHz。`APLAY` 启动后自动轮播全部音频文件。
-- `VIDLIST`、`IMGLIST`、`ALIST` 会递归扫描子目录，序号按 FAT 遍历顺序生成；也可传相对路径。`SDLIST` 仍只在 LCD 上浏览根目录。
-
-## 验证
-
-当前没有自动化硬件测试。提交前至少运行开发构建；在硬件上验证 `STATUS`、`VPLAY`、`VIDLIST`/`VID`、`IMGLIST`/`IMG`、`ALIST`/`APLAY`，并检查双屏同步、RGB565 色序、撕裂、PSRAM/cache 与 DMA 行为。生产安全还必须完成指南中的错误令牌、掉电、重启和密文回读测试。
+源码、工具和硬件资料仍按工程目录组织；`AGENTS.md`、`CLAUDE.md`、`CODEBUDDY.md` 为仓库开发规则文件，保留在根目录供开发工具读取。

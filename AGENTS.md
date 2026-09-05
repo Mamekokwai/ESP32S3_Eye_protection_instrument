@@ -9,7 +9,7 @@ This is an ESP-IDF v5.4.4 firmware project for an ESP32-S3-WROOM-1 eye-care devi
 - `components/esp_lcd_jd9855/` contains the LCD panel driver and initialization sequence.
 - `tools/` contains video conversion and flash-writing helpers.
 - `partitions.csv` and `sdkconfig.defaults` define the custom 16 MB flash layout and FreeRTOS tick settings.
-- `issue/` and `info/` store project notes, board images, and hardware diagnostics.
+- `doc/` stores the maintained project documentation, architecture maps, hardware reference, and historical RCA; `info/` stores board images and hardware source files.
 
 ## Build, Test, and Development Commands
 
@@ -43,15 +43,15 @@ Do not commit generated `build/` output, private media, or device-specific secre
 
 中文显示：FATFS 用 CODEPAGE_936（`d_name` 为 GBK 双字节），启动提示走内嵌点阵字库（`gbk_embedded_font.h`），SDLIST 中文文件名走 TF 卡 `/SYSTEM/FONT/GBK16.FON`（`gbk_font.c`）。媒体递归路径在固件内部为 GBK；UART1 响应默认 GBK，USB Serial-JTAG 响应默认 UTF-8，可通过 `ENC UTF8|GBK` 为当前链路独立切换。新增/删除字库或改编码前检查 `sdkconfig.defaults` 的 FATFS 配置。
 
-`VIDLIST`, `IMGLIST`, and `ALIST` recursively scan TF subdirectories; `SDLIST` remains a root-directory LCD browser. Production builds additionally use `sdkconfig.production.defaults`, Secure Boot V2, Release-mode Flash Encryption, and the one-time SD authorization flow in `SECURITY_PROVISIONING.md`. Never flash a production build to a development board or burn eFuses without an explicit hardware provisioning step.
+`VIDLIST`, `IMGLIST`, and `ALIST` recursively scan TF subdirectories; `SDLIST` remains a root-directory LCD browser. Production builds additionally use `sdkconfig.production.defaults`, Secure Boot V2, Release-mode Flash Encryption, and the one-time SD authorization flow in `doc/SECURITY_PROVISIONING.md`. Never flash a production build to a development board or burn eFuses without an explicit hardware provisioning step.
 
 ## 文档-固件同步规则（每次改硬件/引脚/固件行为必须执行）
 
 硬件与引脚信息以 `Project/YT06_主板1_V1.4/YT06-主板1_V1.4.net`（V1.4 网络表）为权威；固件落后于硬件时，以网络表为准并适配固件。**每次修改引脚分配、外设接线、驱动行为后，必须同步以下文档，不得只改代码：**
 
 1. **Obsidian 硬件笔记**：`E:\Note\Obsidian\笔记\开发\嵌入式\项目\2026\0604眼保仪_ESP32S3_320x320\硬件设计\关键硬件网络连接.md` —— 更新对应脚位表/链路/差异标注，`updated` 日期同步更新。
-2. **仓库事实表**：`CURRENT_IMPLEMENTATION.md` —— 更新硬件与总线表中受影响的行，删除过时的旧表述。
+2. **仓库事实表**：`doc/CURRENT_IMPLEMENTATION.md` —— 更新硬件与总线表中受影响的行，删除过时的旧表述。
 3. **Obsidian 软件/项目笔记**（若涉及）：UART 指令、媒体、解锁等文档同步更新。
-4. 检查 `AGENTS.md`/`CLAUDE.md`/`README.md`/`UART_COMMANDS.md` 中是否有与该改动冲突的旧表述，一并修正。
+4. 检查 `AGENTS.md`/`CLAUDE.md`/`README.md`/`doc/UART_COMMANDS.md` 中是否有与该改动冲突的旧表述，一并修正。
 
 网络表（V1.1 与 V1.4 不兼容）与固件冲突时：以 V1.4 网络表为准，固件需适配；差异要在 `关键硬件网络连接.md` 中标注 ⚠️ 与"固件待适配/已适配"状态。

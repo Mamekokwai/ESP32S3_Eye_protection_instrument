@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "SD 卡资源判断规则（制作参考）",
-    "output": "info/Map/sd-resource-rule.html",
+    "output": "doc/Map/sd-resource-rule.html",
     "viewBox": [1260, 620],
     "quality_profile": "showcase"
   },

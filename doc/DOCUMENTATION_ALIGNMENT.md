@@ -1,18 +1,22 @@
-# 文档一致性清单（2026-09-01）
+# 文档一致性清单（2026-09-05）
 
 ## 仓库当前文档
 
 | 文档 | 状态 | 作用 |
 |---|---|---|
 | `CURRENT_IMPLEMENTATION.md` | 当前基准 | 硬件、总线、媒体、分区事实表（已含 V1.4 背光 GPIO1） |
-| `README.md` | 已对齐 | 构建、目录、引脚、媒体限制（V1.4、背光、通用令牌） |
-| `UART_COMMANDS.md` | 已对齐 | 全部当前指令、递归路径、并发规则（背光已改 ESP32 控制） |
+| `README.md` | 已对齐 | 构建、目录、引脚、媒体限制（V1.4、背光、通用令牌、APLAY 自动轮播） |
+| `UART_COMMANDS.md` | 已对齐 | 全部当前指令、递归路径、编码转换、并发规则（背光已改 ESP32 控制） |
 | `SECURITY_PROVISIONING.md` | 已对齐 | 密钥分工、通用令牌、生产构建、不可逆烧录与验收 |
+| `PORTING.md` | 已对齐 | 与芯片型号无关的模块、UART 和 workspace 移植说明 |
+| `TODO.md` | 已对齐 | 量产前安全、工具链和验收事项 |
 | `AGENTS.md` | 已对齐 | 含"文档-固件同步规则"章节 |
 | `CLAUDE.md` / `CODEBUDDY.md` | 已对齐 | 开发助手入口，指向 V1.4 与统一基准 |
-| `info/Map/media_pipeline_archify.md` | 已对齐 | 媒体与生产启动链路（通用令牌） |
-| `info/Map/sd-resource-rule.architecture.json` + HTML | 已同步 | TF 递归目录及当前工具路径 |
-| `info/Map/production-unlock.html` + JSON | 已同步 | 生产解锁生命周期图（通用令牌） |
+| `Map/media_pipeline_archify.md` | 已对齐 | 媒体与生产启动链路（通用令牌） |
+| `Map/sd-resource-rule.architecture.json` + HTML | 已同步 | TF 递归目录及当前工具路径 |
+| `Map/production-unlock.html` + JSON | 已同步 | 生产解锁生命周期图（通用令牌） |
+| `hardware/ESP8311.docx` | 硬件参考 | ES8311 原始硬件资料 |
+| `issue/` | 历史归档 | 已解决问题和 RCA，不作为当前实现依据 |
 
 ## Obsidian 项目文档
 
@@ -44,7 +48,7 @@ RCA 文档保留故障发生时的上下文。原空白的 `问题分析/AVI 和
 ## 已消除的主要冲突
 
 - QSPI/单屏/无 TF/MAX98357 历史方案与当前 i80 双屏/SDMMC/ES8311 混写。
-- TF 当前协议写成 SPI 20 MHz、媒体仅根目录。
+- TF 当前正常协议为 SDMMC 1-bit 40 MHz；SPI 20 MHz 仅是 fallback，媒体索引递归扫描子目录。
 - LCD WR/TE/RESET、TF CMD/D0、UART TX、USB 引脚角色错误。
 - **背光归属冲突**：旧 V1.1 背光由 CA51 控制、GPIO1 作 TE；V1.4 无 TE、GPIO1 为 ESP32 LEDC 背光 PWM（固件已适配，`LCD_BACKLIGHT`）。
 - **令牌绑定冲突**：设备绑定令牌 → 通用令牌（不绑定设备，一卡解锁所有设备）。

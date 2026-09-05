@@ -1,6 +1,6 @@
 # ESP32-S3 眼保仪媒体与生产启动链路
 
-当前代码基准：ESP-IDF v5.4.4，YT06 V1.4，双 320×320 JD9855。更细的事实表见仓库根目录 `CURRENT_IMPLEMENTATION.md`。
+当前代码基准：ESP-IDF v5.4.4，YT06 V1.4，双 320×320 JD9855。更细的事实表见上级目录 [`CURRENT_IMPLEMENTATION.md`](../CURRENT_IMPLEMENTATION.md)。
 
 ## 启动入口
 
@@ -16,7 +16,7 @@ flowchart TD
     BURN --> APP
 ```
 
-生产锁只由 `sdkconfig.production.defaults` 启用；开发构建直接进入应用。私钥不在 TF 卡和固件中，TF 卡只有由解锁私钥签名的通用授权令牌（不绑定设备，可解锁所有设备）。生产内容保密依赖 Secure Boot V2 与 Release 模式 Flash Encryption，详见 `SECURITY_PROVISIONING.md`。
+生产锁只由 `sdkconfig.production.defaults` 启用；开发构建直接进入应用。私钥不在 TF 卡和固件中，TF 卡只有由解锁私钥签名的通用授权令牌（不绑定设备，可解锁所有设备）。生产内容保密依赖 Secure Boot V2 与 Release 模式 Flash Encryption，详见上级目录 [`SECURITY_PROVISIONING.md`](../SECURITY_PROVISIONING.md)。
 
 ## 总体媒体链路
 
@@ -60,7 +60,7 @@ flowchart LR
 
 ## 音频
 
-`ALIST`/`APLAY` 递归选择 TF 卡 `.pcm/.mp3`。PCM 约定 16-bit、单声道、16 kHz；MP3 由 micro-mp3 解码。CPU1 独立任务将源采样率线性重采样至 ES8311 输出链路，I2S0 使用 MCLK45/BCLK39/WS41/DOUT42，GPIO2 高电平开启功放。
+`ALIST`/`APLAY` 递归选择 TF 卡 `.pcm/.mp3`。`APLAY` 从指定曲目开始按 `ALIST` 顺序自动轮播，播完回到第一首，单曲时循环。PCM 约定 16-bit、单声道、16 kHz；MP3 由 micro-mp3 解码。CPU1 独立任务将源采样率线性重采样至 ES8311 输出链路，I2S0 使用 MCLK45/BCLK39/WS41/DOUT42，GPIO2 高电平开启功放。
 
 ## 目录规则
 

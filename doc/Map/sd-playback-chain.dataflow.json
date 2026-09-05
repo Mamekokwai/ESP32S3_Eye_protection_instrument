@@ -3,7 +3,7 @@
   "diagram_type": "dataflow",
   "meta": {
     "title": "SD 卡 → 屏幕 / 喇叭 播放链路",
-    "output": "info/Map/sd-playback-chain.html",
+    "output": "doc/Map/sd-playback-chain.html",
     "viewBox": [1180, 640],
     "quality_profile": "showcase"
   },

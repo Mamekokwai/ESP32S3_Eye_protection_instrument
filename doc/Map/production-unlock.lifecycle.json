@@ -3,7 +3,7 @@
   "diagram_type": "lifecycle",
   "meta": {
     "title": "生产加密授权解锁流程",
-    "output": "info/Map/production-unlock.html",
+    "output": "doc/Map/production-unlock.html",
     "viewBox": [1200, 680],
     "quality_profile": "showcase"
   },
